@@ -12,7 +12,7 @@ import json # Library to handle JSON files
 USE_LOCAL_DATA = True
 
 # Your FPL mini-league ID
-LEAGUE_ID = 164188
+LEAGUE_ID = 665732
 
 # --- FPL API Endpoints (only used if USE_LOCAL_DATA is False) ---
 FPL_API_URL = "https://fantasy.premierleague.com/api/"
@@ -74,7 +74,7 @@ st.set_page_config(page_title="FPL Mini-League Dashboard", layout="wide")
 st.title(f"🏆 FPL Mini-League Dashboard")
 if USE_LOCAL_DATA:
     st.warning("⚠️ App is running in Local Data Mode. Data is not live.")
-st.markdown(f"### League ID: {LEAGUE_ID}")
+st.markdown(f"### League Name: PepRoulette™   League ID: {LEAGUE_ID}")
 
 # --- Data Loading and Processing ---
 with st.spinner('Loading FPL data...'):
