@@ -11,14 +11,26 @@ GOOGLE_SHEET_NAME = "FPL-Data-Pep"
 # --- Google Sheets Connection ---
 @st.cache_resource(ttl=600)
 def connect_to_gsheet():
-    """Establishes a connection to the Google Sheet."""
-    # *** THIS IS THE CORRECTED LINE ***
-    # We need both the spreadsheets and the drive scope to find a sheet by name
+    """
+    Establishes a connection to the Google Sheet.
+    Uses local file for local development, and st.secrets for deployment.
+    """
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
-    creds = Credentials.from_service_account_file(".streamlit/google_credentials.json", scopes=scopes)
+    
+    # Try to load credentials from the local file first (for local development)
+    try:
+        creds = Credentials.from_service_account_file(".streamlit/google_credentials.json", scopes=scopes)
+    # If the file is not found, it means we're on the deployed server.
+    # In that case, load the credentials from Streamlit's secrets manager.
+    except FileNotFoundError:
+        creds = Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"],  # The name of the section you created
+            scopes=scopes
+        )
+        
     client = gspread.authorize(creds)
     return client.open(GOOGLE_SHEET_NAME)
 
