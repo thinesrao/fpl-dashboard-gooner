@@ -1,4 +1,4 @@
-# data_pipeline.py (IMPROVED with Dynamic Gameweek Detection)
+# data_pipeline.py (updated for GitHub Actions)
 import gspread
 from gspread_dataframe import set_with_dataframe
 import pandas as pd
@@ -6,6 +6,7 @@ import requests
 import json
 import time
 from datetime import datetime
+import os # Import the os module
 
 # --- Configuration ---
 LEAGUE_ID = 665732
@@ -19,6 +20,19 @@ LEAGUE_URL = f"{FPL_API_URL}leagues-classic/{LEAGUE_ID}/standings/"
 ENTRY_EVENT_URL = f"{FPL_API_URL}entry/{{entry_id}}/event/{{gameweek}}/picks/"
 ELEMENT_SUMMARY_URL = f"{FPL_API_URL}element-summary/{{player_id}}/"
 
+def get_credentials():
+    """Gets credentials from environment variable or local file."""
+    # Check if the GCP_CREDENTIALS environment variable exists (for GitHub Actions)
+    creds_json_str = os.getenv("GCP_CREDENTIALS")
+    if creds_json_str:
+        print("Authenticating via GitHub Actions secret...")
+        creds_json = json.loads(creds_json_str)
+        return gspread.service_account_from_dict(creds_json)
+    # Otherwise, fall back to the local file (for local development)
+    else:
+        print("Authenticating via local credentials file...")
+        return gspread.service_account(filename=CREDENTIALS_FILE)
+    
 def get_json_from_url(url):
     """Generic function to get JSON from a URL."""
     try:
@@ -39,11 +53,11 @@ def get_player_gameweek_points(player_id, all_player_details):
 def main():
     print("--- Starting FPL Data Pipeline ---")
 
-    # 1. Connect to Google Sheets
-    gc = gspread.service_account(filename=CREDENTIALS_FILE)
+    # 1. Connect to Google Sheets using the new credentials function
+    gc = get_credentials()
     spreadsheet = gc.open(GOOGLE_SHEET_NAME)
     print(f"Connected to Google Sheet: '{GOOGLE_SHEET_NAME}'")
-
+    
     # 2. Fetch Base Data
     fpl_data = get_json_from_url(BOOTSTRAP_STATIC_URL)
     league_data = get_json_from_url(LEAGUE_URL)
