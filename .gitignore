@@ -3,6 +3,7 @@ venv/
 .venv/
 
 # Streamlit secrets
+.streamlit/
 .streamlit/secrets.toml
 
 # Python cache
