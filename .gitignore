@@ -1,11 +1,17 @@
-# Virtual Environment
+# Python virtual environment
 venv/
 .venv/
 
-# Streamlit secrets
-.streamlit/
-.streamlit/secrets.toml
-
-# Python cache
+# Python cache files
 __pycache__/
 *.pyc
+
+# Streamlit secrets (VERY IMPORTANT)
+.streamlit/
+
+# macOS system files
+.DS_Store
+
+# Documentation / Large files
+*.pdf
+*.md
