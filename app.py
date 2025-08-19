@@ -1,189 +1,102 @@
+# app.py (CORRECTED with proper API scopes)
 import streamlit as st
-import requests
 import pandas as pd
-import time
-import json # Library to handle JSON files
+import gspread
+from google.oauth2.service_account import Credentials
+from gspread.exceptions import SpreadsheetNotFound, WorksheetNotFound
 
 # --- Configuration ---
+GOOGLE_SHEET_NAME = "FPL-Data-Pep"
 
-# Master switch to toggle between live API and local JSON files for testing
-# True = Use local JSON files from the 'data/' folder
-# False = Use the live FPL API
-USE_LOCAL_DATA = True
+# --- Google Sheets Connection ---
+@st.cache_resource(ttl=600)
+def connect_to_gsheet():
+    """Establishes a connection to the Google Sheet."""
+    # *** THIS IS THE CORRECTED LINE ***
+    # We need both the spreadsheets and the drive scope to find a sheet by name
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    creds = Credentials.from_service_account_file(".streamlit/google_credentials.json", scopes=scopes)
+    client = gspread.authorize(creds)
+    return client.open(GOOGLE_SHEET_NAME)
 
-# Your FPL mini-league ID
-LEAGUE_ID = 665732
-
-# --- FPL API Endpoints (only used if USE_LOCAL_DATA is False) ---
-FPL_API_URL = "https://fantasy.premierleague.com/api/"
-BOOTSTRAP_STATIC_URL = f"{FPL_API_URL}bootstrap-static/"
-LEAGUE_URL = f"{FPL_API_URL}leagues-classic/{LEAGUE_ID}/standings/"
-ENTRY_EVENT_URL = f"{FPL_API_URL}entry/{{entry_id}}/event/{{gameweek}}/picks/"
-
-# --- Data Fetching with Caching ---
-
-@st.cache_data(ttl=900)
-def get_fpl_data():
-    """Fetches general FPL data from local file or live API."""
-    if USE_LOCAL_DATA:
-        st.info("`USE_LOCAL_DATA` is True. Loading `bootstrap-static.json` from local `data/` folder.")
-        with open("data/bootstrap-static.json", "r") as f:
-            return json.load(f)
-    else:
-        response = requests.get(BOOTSTRAP_STATIC_URL)
-        response.raise_for_status()
-        return response.json()
-
-@st.cache_data(ttl=900)
-def get_league_data(league_id):
-    """Fetches league standings from local file or live API."""
-    if USE_LOCAL_DATA:
-        st.info("`USE_LOCAL_DATA` is True. Loading `league-standings.json` from local `data/` folder.")
-        with open("data/league-standings.json", "r") as f:
-            return json.load(f)
-    else:
-        response = requests.get(LEAGUE_URL.format(league_id=league_id))
-        response.raise_for_status()
-        return response.json()
-
-@st.cache_data(ttl=900)
-def get_manager_team(manager_id, gameweek):
-    """Fetches a manager's team for a gameweek from local file or live API."""
-    if USE_LOCAL_DATA:
-        filepath = f"data/picks/manager_{manager_id}_gw_{gameweek}.json"
-        try:
-            with open(filepath, "r") as f:
-                return json.load(f)
-        except FileNotFoundError:
-            st.error(f"Local file not found for this selection: {filepath}")
-            return None
-    else:
-        url = ENTRY_EVENT_URL.format(entry_id=manager_id, gameweek=gameweek)
-        try:
-            response = requests.get(url)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            st.error(f"Could not fetch data for manager {manager_id} in GW{gameweek}: {e}")
-            return None
+@st.cache_data(ttl=600)
+def read_from_gsheet(worksheet_name):
+    """Reads a specific worksheet from the Google Sheet into a DataFrame."""
+    spreadsheet = connect_to_gsheet()
+    worksheet = spreadsheet.worksheet(worksheet_name)
+    return pd.DataFrame(worksheet.get_all_records())
 
 # --- Main App Logic ---
-
 st.set_page_config(page_title="FPL Mini-League Dashboard", layout="wide")
+st.title("🏆 FPL Mini-League Awards Dashboard")
 
-st.title(f"🏆 FPL Mini-League Dashboard")
-if USE_LOCAL_DATA:
-    st.warning("⚠️ App is running in Local Data Mode. Data is not live.")
-st.markdown(f"### League Name: PepRoulette™   League ID: {LEAGUE_ID}")
+try:
+    # --- Load metadata first ---
+    metadata = read_from_gsheet("metadata").iloc[0]
+    last_gw = metadata['last_finished_gw']
+    last_updated = metadata['last_updated_utc']
+    
+    st.markdown(f"**Awards are calculated based on all data up to Gameweek {last_gw}.**")
+    st.caption(f"Last updated: {last_updated} UTC")
 
-# --- Data Loading and Processing ---
-with st.spinner('Loading FPL data...'):
-    fpl_data = get_fpl_data()
-    league_data = get_league_data(LEAGUE_ID)
+    # --- Load all award leaderboards ---
+    leaderboards = {
+        "golden_boot": read_from_gsheet("golden_boot"),
+        "playmaker": read_from_gsheet("playmaker"),
+        "golden_glove": read_from_gsheet("golden_glove"),
+        "best_gk": read_from_gsheet("best_gk"),
+        "best_def": read_from_gsheet("best_def"),
+        "best_mid": read_from_gsheet("best_mid"),
+        "best_fwd": read_from_gsheet("best_fwd"),
+        "best_vc": read_from_gsheet("best_vc")
+    }
 
-    player_map = {player['id']: f"{player['first_name']} {player['web_name']}" for player in fpl_data['elements']}
-    team_map = {team['id']: team['name'] for team in fpl_data['teams']}
+    st.header(f"🏆 Season Award Leaders (as of GW{last_gw})")
 
-    # --- Process and determine the current or last finished gameweek ---
-    current_gameweek = 0
-    for gw_info in fpl_data['events']:
-        if gw_info['is_current']:
-            current_gameweek = gw_info['id']
-            break
-    if current_gameweek == 0:
-        for gw_info in reversed(fpl_data['events']):
-            if gw_info['finished']:
-                current_gameweek = gw_info['id']
-                break
+    # --- Metric Card Grid ---
+    col1, col2, col3 = st.columns(3)
+    
+    gb_winner = leaderboards['golden_boot'].iloc[0]
+    pm_winner = leaderboards['playmaker'].iloc[0]
+    gg_winner = leaderboards['golden_glove'].iloc[0]
+    gk_winner = leaderboards['best_gk'].iloc[0]
+    def_winner = leaderboards['best_def'].iloc[0]
+    mid_winner = leaderboards['best_mid'].iloc[0]
+    fwd_winner = leaderboards['best_fwd'].iloc[0]
+    vc_winner = leaderboards['best_vc'].iloc[0]
 
-# --- Sidebar for User Input ---
-st.sidebar.header("Filters")
-selected_gameweek = st.sidebar.slider(
-    "Select Gameweek",
-    min_value=1,
-    max_value=38, # Hardcode to 38 for local testing
-    value=current_gameweek if current_gameweek != 0 else 38,
-    step=1
-)
+    col1.metric("🥇 Golden Boot", gb_winner['manager_name'], f"{gb_winner.iloc[1]} Goals")
+    col2.metric("🅰️ Playmaker", pm_winner['manager_name'], f"{pm_winner.iloc[1]} Assists")
+    col3.metric("🧤 Golden Glove", gg_winner['manager_name'], f"{gg_winner.iloc[1]} Clean Sheets")
+    st.divider()
 
-# --- Process League and Manager Data ---
-managers = league_data['standings']['results']
-manager_df = pd.DataFrame(managers)
-manager_df = manager_df[['entry', 'player_name', 'entry_name', 'total', 'rank']]
-manager_df.rename(columns={'entry': 'manager_id', 'player_name': 'manager_name', 'entry_name': 'team_name'}, inplace=True)
+    colA, colB, colC, colD = st.columns(4)
+    colA.metric("👑 Best Goalkeeper", gk_winner['manager_name'], f"{gk_winner.iloc[1]} Pts")
+    colB.metric("🛡️ Best Defenders", def_winner['manager_name'], f"{def_winner.iloc[1]} Pts")
+    colC.metric("🎩 Best Midfielders", mid_winner['manager_name'], f"{mid_winner.iloc[1]} Pts")
+    colD.metric("💥 Best Forwards", fwd_winner['manager_name'], f"{fwd_winner.iloc[1]} Pts")
+    st.metric("🥈 Best Vice-Captain", vc_winner['manager_name'], f"{vc_winner.iloc[1]} Points")
 
-st.header(f"Gameweek {selected_gameweek} Analysis")
+    # --- Detailed Leaderboards in Expanders ---
+    st.divider()
+    st.subheader("Detailed Leaderboards")
+    
+    award_titles = {
+        "golden_boot": "🥇 Golden Boot Standings", "playmaker": "🅰️ Playmaker Standings",
+        "golden_glove": "🧤 Golden Glove Standings", "best_gk": "👑 Best Goalkeeper Standings",
+        "best_def": "🛡️ Best Defenders Standings", "best_mid": "🎩 Best Midfielders Standings",
+        "best_fwd": "💥 Best Forwards Standings", "best_vc": "🥈 Best Vice-Captain Standings"
+    }
+    for name, df in leaderboards.items():
+        with st.expander(award_titles[name]):
+            st.dataframe(df.set_index(df.columns[0]), use_container_width=True)
 
-# Fetch all manager picks for the selected gameweek
-all_manager_picks = {}
-progress_bar = st.progress(0)
-status_text = st.empty()
-
-for i, manager in enumerate(manager_df.itertuples()):
-    status_text.text(f"Fetching data for {manager.manager_name}...")
-    picks = get_manager_team(manager.manager_id, selected_gameweek)
-    if picks:
-        all_manager_picks[manager.manager_id] = picks
-    progress_bar.progress((i + 1) / len(manager_df))
-    # No need to sleep for local files, it will be instant
-    if not USE_LOCAL_DATA:
-        time.sleep(0.1)
-
-status_text.text("All data loaded successfully!")
-progress_bar.empty()
-
-# --- Award Category Dashboards ---
-tab1, tab2, tab3 = st.tabs(["👑 King of the Gameweek", "🪑 Bench Warmers", "©️ Captaincy Report"])
-
-with tab1:
-    gw_scores = []
-    for manager_id, picks in all_manager_picks.items():
-        if picks and picks.get('entry_history'):
-            manager_name = manager_df.loc[manager_df['manager_id'] == manager_id, 'manager_name'].iloc[0]
-            gw_points = picks['entry_history']['points']
-            gw_scores.append({'Manager': manager_name, 'Gameweek Points': gw_points})
-
-    if gw_scores:
-        gw_scores_df = pd.DataFrame(gw_scores).sort_values(by='Gameweek Points', ascending=False).reset_index(drop=True)
-        st.subheader("Gameweek Scoreboard")
-        st.dataframe(gw_scores_df, use_container_width=True)
-        if not gw_scores_df.empty:
-            winner = gw_scores_df.iloc[0]
-            st.metric(label=f"👑 King of Gameweek {selected_gameweek}", value=winner['Manager'], delta=f"{winner['Gameweek Points']} Points")
-
-with tab2:
-    bench_scores = []
-    for manager_id, picks in all_manager_picks.items():
-        if picks and picks.get('entry_history'):
-            manager_name = manager_df.loc[manager_df['manager_id'] == manager_id, 'manager_name'].iloc[0]
-            bench_points = picks['entry_history']['points_on_bench']
-            bench_scores.append({'Manager': manager_name, 'Bench Points': bench_points})
-
-    if bench_scores:
-        bench_scores_df = pd.DataFrame(bench_scores).sort_values(by='Bench Points', ascending=False).reset_index(drop=True)
-        st.subheader("Bench Performance")
-        st.bar_chart(bench_scores_df.set_index('Manager'))
-        if not bench_scores_df.empty:
-            winner = bench_scores_df.iloc[0]
-            st.metric(label="🪑 Top Bench Warmer", value=winner['Manager'], delta=f"{winner['Bench Points']} Points Left on Bench", delta_color="off")
-
-with tab3:
-    captain_picks = []
-    for manager_id, picks_data in all_manager_picks.items():
-        if picks_data and picks_data.get('picks'):
-            manager_name = manager_df.loc[manager_df['manager_id'] == manager_id, 'manager_name'].iloc[0]
-            for pick in picks_data['picks']:
-                if pick['is_captain']:
-                    player_id = pick['element']
-                    player_name = player_map.get(player_id, "Unknown Player")
-                    captain_picks.append({'Manager': manager_name, 'Captain': player_name, 'Multiplier': pick['multiplier']})
-                    if picks_data.get('active_chip') == 'trip_capt':
-                        captain_picks[-1]['Multiplier'] = 3
-
-    if captain_picks:
-        captain_df = pd.DataFrame(captain_picks)
-        st.subheader("Captain Choices")
-        st.dataframe(captain_df, use_container_width=True)
-
-st.subheader("Overall League Standings")
-st.dataframe(manager_df.set_index('rank'), use_container_width=True)
+except (SpreadsheetNotFound, WorksheetNotFound):
+    st.error("The required Google Sheet or a specific worksheet was not found.")
+    st.info("Please run the `data_pipeline.py` script and ensure it completes successfully before running the app.")
+except Exception as e:
+    st.error("An unexpected error occurred. Please check the logs.")
+    st.exception(e)
