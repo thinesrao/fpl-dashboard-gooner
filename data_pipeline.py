@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 
 # --- Configuration ---
-LEAGUE_ID = 164188
+LEAGUE_ID = 665732
 GOOGLE_SHEET_NAME = "FPL-Data-Pep"
 CREDENTIALS_FILE = ".streamlit/google_credentials.json"
 
