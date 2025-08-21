@@ -1,4 +1,4 @@
-# data_pipeline.py (FINAL v12 - Corrected Penalty King & All 20 Awards)
+# data_pipeline.py (FINAL v13 - Corrected Underdog Logic & All 20 Awards)
 import gspread
 from gspread_dataframe import set_with_dataframe
 import pandas as pd
@@ -88,8 +88,7 @@ def main():
         
         dream_team_players = {p['id'] for p in live_gw_data.get('elements', []) if p.get('stats', {}).get('in_dreamteam')}
         top_score = 0
-        if dream_team_players:
-            top_score = max(p['stats']['total_points'] for p in live_gw_data['elements'] if p['id'] in dream_team_players)
+        if dream_team_players: top_score = max(p['stats']['total_points'] for p in live_gw_data['elements'] if p['id'] in dream_team_players)
         top_performers = {p['id'] for p in live_gw_data['elements'] if p['id'] in dream_team_players and p['stats']['total_points'] == top_score}
 
         classic_standings = classic_league_data.get('standings', {}).get('results', [])
@@ -106,11 +105,14 @@ def main():
                 bench_squad_ids = [p['element'] for p in picks_data['picks'][11:]]
                 squad_stats_df = elements_df[elements_df['id'].isin(active_squad_ids)]
                 
-                # --- All 20 Award Calculations ---
-                for award, stat in [("golden_boot", "goals_scored"), ("playmaker", "assists"), ("golden_glove", "clean_sheets")]:
-                    long_format_data[award].append({'gameweek': gw, 'manager_name': manager_name, 'score': squad_stats_df[stat].sum()})
+                # Original Awards
+                long_format_data["golden_boot"].append({'gameweek': gw, 'manager_name': manager_name, 'score': squad_stats_df['goals_scored'].sum()})
+                long_format_data["playmaker"].append({'gameweek': gw, 'manager_name': manager_name, 'score': squad_stats_df['assists'].sum()})
                 for award, pos in [("best_gk", 1), ("best_def", 2), ("best_mid", 3), ("best_fwd", 4)]:
                     long_format_data[award].append({'gameweek': gw, 'manager_name': manager_name, 'score': squad_stats_df[squad_stats_df['element_type'] == pos]['total_points'].sum()})
+                
+                clean_sheets_gw = sum(next((p['stats'].get('clean_sheets', 0) for p in live_gw_data.get('elements', []) if p['id'] == p_id), 0) for p_id in active_squad_ids if elements_df[elements_df['id'] == p_id].iloc[0]['element_type'] in [1, 2, 3])
+                long_format_data["golden_glove"].append({'gameweek': gw, 'manager_name': manager_name, 'score': clean_sheets_gw})
 
                 captain_id = next((p['element'] for p in picks_data['picks'] if p['is_captain']), None)
                 vc_id = next((p['element'] for p in picks_data['picks'] if p['is_vice_captain']), None)
@@ -120,6 +122,7 @@ def main():
                 elif vc_id: vc_points = player_details_dict.get(vc_id, {}).get('history', [])[gw-1].get('total_points', 0) if len(player_details_dict.get(vc_id, {}).get('history', [])) >= gw else 0
                 long_format_data['best_vc'].append({'gameweek': gw, 'manager_name': manager_name, 'score': vc_points})
 
+                # New Awards
                 transfers_in_gw = [t for t in manager_transfers.get(manager_id, []) if t['event'] == gw]
                 points_in = sum(player_details_dict.get(t['element_in'], {}).get('history', [])[gw-1].get('total_points', 0) for t in transfers_in_gw)
                 points_out = sum(player_details_dict.get(t['element_out'], {}).get('history', [])[gw-1].get('total_points', 0) for t in transfers_in_gw)
@@ -142,11 +145,11 @@ def main():
                     if rank_prev and rank_now: rank_rise = max(0, rank_prev - rank_now)
                 long_format_data['shooting_stars'].append({'gameweek': gw, 'manager_name': manager_name, 'score': rank_rise})
                 
-                # --- Penalty King: CORRECTED & ROBUST LOGIC ---
                 penalties_saved_score = squad_stats_df['penalties_saved'].sum() * 3
                 penalties_missed_score = squad_stats_df['penalties_missed'].sum() * -2
                 long_format_data['penalty_king'].append({'gameweek': gw, 'manager_name': manager_name, 'score': penalties_saved_score + penalties_missed_score})
 
+                # --- Best Underdog: CORRECTED & ROBUST LOGIC HIERARCHY ---
                 underdog_score = 0
                 if gw > 1:
                     match = h2h_results_df[((h2h_results_df['event'] == gw) & (h2h_results_df['entry_1_entry'] == manager_id)) | ((h2h_results_df['event'] == gw) & (h2h_results_df['entry_2_entry'] == manager_id))]
@@ -158,10 +161,18 @@ def main():
                         
                         if opponent_id:
                             opp_classic_rank, opp_h2h_rank = classic_ranks_prev.get(opponent_id, 999), h2h_ranks_prev.get(opponent_id, 999)
-                            if opp_classic_rank <= 4 or opp_h2h_rank <= 4:
+                            
+                            is_classic_leader = (opp_classic_rank == 1)
+                            is_h2h_leader = (opp_h2h_rank == 1)
+                            is_classic_top4 = (2 <= opp_classic_rank <= 4)
+                            is_h2h_top4 = (2 <= opp_h2h_rank <= 4)
+
+                            if is_classic_leader and is_h2h_leader:
+                                underdog_score = 3
+                            elif is_classic_leader or is_h2h_leader:
+                                underdog_score = 2
+                            elif is_classic_top4 or is_h2h_top4:
                                 underdog_score = 1
-                                if opp_classic_rank == 1 and opp_h2h_rank == 1: underdog_score = 3
-                                elif opp_classic_rank == 1 or opp_h2h_rank == 1: underdog_score = 2
                 long_format_data['best_underdog'].append({'gameweek': gw, 'manager_name': manager_name, 'score': underdog_score})
         print(f"  Processed Gameweek {gw}/{last_finished_gw}")
 
@@ -169,13 +180,14 @@ def main():
     print("Calculating final award standings...")
     worksheets_to_write = {}
     
+    # Process historical awards
     for award_name, history_data in long_format_data.items():
         if not history_data: continue
         long_df = pd.DataFrame(history_data)
         wide_df = long_df.pivot(index='manager_name', columns='gameweek', values='score').fillna(0).astype(int)
         wide_df.columns = [f"GW{col}" for col in wide_df.columns]
         
-        if award_name in ["transfer_king", "bench_king", "shooting_stars", "best_vc", "dream_team", "defensive_king", "best_underdog", "penalty_king"]:
+        if award_name in ["transfer_king", "bench_king", "shooting_stars", "best_vc", "dream_team", "defensive_king", "best_underdog", "penalty_king", "golden_glove"]:
             total = wide_df.sum(axis=1)
         else:
             total = wide_df.get(f"GW{last_finished_gw}", 0)
@@ -190,6 +202,7 @@ def main():
         column_order = ['Standings', 'Team', 'Manager', 'Total'] + gameweek_cols
         worksheets_to_write[award_name] = final_df[column_order]
 
+    # Process single-value awards
     single_value_awards = {"steady_king": [], "highest_gw_score": [], "freehit_king": [], "benchboost_king": [], "triplecaptain_king": []}
     for _, manager in manager_df.iterrows():
         manager_id, manager_name, team_name = manager['manager_id'], manager['manager_name'], manager['team_name']
@@ -202,13 +215,14 @@ def main():
         single_value_awards['steady_king'].append({'Manager': manager_name, 'Team': team_name, 'Score': total_points / total_transfers if total_transfers > 0 else 0})
 
         fh_scores, bb_scores, tc_scores, normal_scores = [], [], [], []
-        for gw_data in history.get('current', []):
-            chip_played = next((c['name'] for c in history.get('chips', []) if c['event'] == gw_data['event']), None) if history else None
-            score = gw_data['points'] - gw_data['event_transfers_cost']
-            if chip_played == 'freehit': fh_scores.append(score)
-            elif chip_played == 'bboost': bb_scores.append(score)
-            elif chip_played == '3xc': tc_scores.append(score)
-            elif not chip_played: normal_scores.append(score)
+        if history and 'current' in history:
+            for gw_data in history.get('current', []):
+                chip_played = next((c['name'] for c in history.get('chips', []) if c['event'] == gw_data['event']), None)
+                score = gw_data['points'] - gw_data['event_transfers_cost']
+                if chip_played == 'freehit': fh_scores.append(score)
+                elif chip_played == 'bboost': bb_scores.append(score)
+                elif chip_played == '3xc': tc_scores.append(score)
+                elif not chip_played: normal_scores.append(score)
         
         single_value_awards['freehit_king'].append({'Manager': manager_name, 'Team': team_name, 'Score': sum(fh_scores)})
         single_value_awards['benchboost_king'].append({'Manager': manager_name, 'Team': team_name, 'Score': sum(bb_scores)})
@@ -217,9 +231,11 @@ def main():
 
     for award_name, data in single_value_awards.items():
         if not data: continue
-        df = pd.DataFrame(data).sort_values(by='Score', ascending=False).reset_index(drop=True)
-        df['Standings'] = df['Score'].rank(method='min', ascending=False).astype(int)
-        worksheets_to_write[award_name] = df[['Standings', 'Team', 'Manager', 'Score']]
+        df = pd.DataFrame(data)
+        if 'Score' in df.columns:
+             df = df.sort_values(by='Score', ascending=False).reset_index(drop=True)
+             df['Standings'] = df['Score'].rank(method='min', ascending=False).astype(int)
+             worksheets_to_write[award_name] = df[['Standings', 'Team', 'Manager', 'Score']]
 
     metadata_df = pd.DataFrame([{'last_finished_gw': last_finished_gw, 'last_updated_utc': datetime.now(timezone.utc).isoformat()}])
     worksheets_to_write["metadata"] = metadata_df
@@ -233,6 +249,8 @@ def main():
             worksheet = spreadsheet.add_worksheet(title=name, rows=len(df) + 1, cols=len(df.columns) + 1)
         set_with_dataframe(worksheet, df, include_index=False)
         print(f"  Successfully wrote to '{name}' worksheet.")
+        print("  Pausing for 3 seconds to respect API rate limits...")
+        time.sleep(3)
 
     print("--- Pipeline finished successfully! ---")
 

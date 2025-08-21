@@ -1,4 +1,4 @@
-# app.py (FINAL v12 - Displays All 20 Awards Correctly)
+# app.py (FINAL v13 - All UI/UX Improvements Implemented)
 import streamlit as st
 import pandas as pd
 import gspread
@@ -28,8 +28,8 @@ def read_from_gsheet(worksheet_name):
         return None
 
 # --- Main App Logic ---
-st.set_page_config(page_title="FPL Mini-League Dashboard", layout="wide")
-st.title("🏆 FPL Mini-League Awards Dashboard")
+st.set_page_config(page_title="PepRoulette™ FPL Dashboard", layout="wide")
+st.markdown("<h1 style='text-align: center;'>🏆 PepRoulette™ FPL Awards Dashboard 🏆</h1>", unsafe_allow_html=True)
 
 try:
     metadata_df = read_from_gsheet("metadata")
@@ -38,7 +38,8 @@ try:
     else:
         metadata = metadata_df.iloc[0]
         last_gw = metadata['last_finished_gw']
-        st.markdown(f"**Awards calculated up to Gameweek {last_gw}.**")
+        st.markdown(f"<h5 style='text-align: center;'>Awards calculated up to Gameweek {last_gw}</h5>", unsafe_allow_html=True)
+        st.caption(f"Last updated: {metadata['last_updated_utc']} UTC")
 
         AWARD_CONFIG = {
             "golden_boot": ["🥇 Golden Boot", "Goals"], "playmaker": ["🅰️ Playmaker", "Assists"],
@@ -55,7 +56,7 @@ try:
         
         award_sheets = {name: read_from_gsheet(name) for name in AWARD_CONFIG.keys()}
 
-        st.header(f"🏆 Season Award Leaders (as of GW{last_gw})")
+        st.markdown("## 🏆 Season Award Leaders")
         
         all_award_names = list(AWARD_CONFIG.keys())
         cols = st.columns(4)
@@ -66,16 +67,21 @@ try:
                 leader = df.iloc[0]
                 title, suffix = AWARD_CONFIG[name]
                 score_col_name = df.columns[3]
+                leader_score = pd.to_numeric(leader[score_col_name], errors='coerce')
+                
                 with cols[col_idx % 4]:
-                    st.metric(title, leader['Manager'], f"{leader[score_col_name]} {suffix}")
+                    if leader_score > 0:
+                        st.metric(title, leader['Manager'], f"{leader[score_col_name]} {suffix}")
+                    else:
+                        st.metric(title, "Not Available", "0")
                 col_idx += 1
         
         st.divider()
-        st.subheader("Detailed Award Standings")
+        st.markdown("## 📊 Detailed Award Standings")
         for name, (title, _) in AWARD_CONFIG.items():
             wide_df = award_sheets.get(name)
             if wide_df is not None and not wide_df.empty:
-                 with st.expander(f"{title}"):
+                 with st.expander(f"**{title}**"):
                     gameweek_cols = [col for col in wide_df.columns if col.startswith('GW')]
                     
                     if not gameweek_cols:
