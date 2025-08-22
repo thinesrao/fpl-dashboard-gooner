@@ -325,63 +325,83 @@ def main():
             column_order = ['Standings', 'Team', 'Manager', 'Total Monthly Points'] + gw_cols
             worksheets_to_write[f"classic_monthly_{month_name}"] = final_month_df[column_order]
 
+    # --- H2H Monthly Manager (as per screenshot) ---
     h2h_matches_df = pd.DataFrame(h2h_matches_data.get('results', []))
     if not h2h_matches_df.empty:
-        h2h_matches_df['month'] = h2h_matches_df['event'].map(gw_month_map)
-        for month_name in h2h_matches_df['month'].unique():
-            monthly_matches = h2h_matches_df[h2h_matches_df['month'] == month_name].copy()
-            gws_in_month = monthly_matches['event'].unique()
+        # Define the official FPL monthly gameweek ranges
+        FPL_MONTH_MAP = {
+            "August": list(range(1, 4)), "September": list(range(4, 7)),
+            "October": list(range(7, 10)), "November": list(range(10, 14)),
+            "December": list(range(14, 20)), "January": list(range(20, 25)),
+            "February": list(range(25, 29)), "March": list(range(29, 32)),
+            "April": list(range(32, 35)), "May": list(range(35, 39)),
+        }
+        
+        # Create a historical log of H2H standings at the end of each GW
+        h2h_history = []
+        for gw in range(1, last_finished_gw + 1):
+            # We must re-fetch H2H standings for each GW to get historical ranks
+            gw_h2h_data = get_json_from_url(f"{FPL_API_URL}leagues-h2h/{H2H_LEAGUE_ID}/standings/?page_standings=1&event={gw}")
+            if gw_h2h_data:
+                for team in gw_h2h_data.get('standings',{}).get('results',[]):
+                    h2h_history.append({'gameweek': gw, 'manager_id': team['entry'], 'total_h2h_points': team['total']})
+        h2h_history_df = pd.DataFrame(h2h_history)
+
+        for month_name, gws_in_month in FPL_MONTH_MAP.items():
+            if not gws_in_month or gws_in_month[0] > last_finished_gw:
+                continue
+
+            last_gw_of_month = max([gw for gw in gws_in_month if gw <= last_finished_gw])
+            last_gw_of_prev_month = min(gws_in_month) - 1
+
+            h2h_totals_end_of_month = h2h_history_df[h2h_history_df['gameweek'] == last_gw_of_month][['manager_id', 'total_h2h_points']]
             
-            # Deconstruct matches into individual results
+            if last_gw_of_prev_month > 0:
+                h2h_totals_start_of_month = h2h_history_df[h2h_history_df['gameweek'] == last_gw_of_prev_month][['manager_id', 'total_h2h_points']]
+                monthly_summary = h2h_totals_end_of_month.merge(h2h_totals_start_of_month, on='manager_id', suffixes=('_end', '_start'))
+                monthly_summary['Total_Head_to_Head_FPL_Point'] = monthly_summary['total_h2h_points_end'] - monthly_summary['total_h2h_points_start']
+            else:
+                monthly_summary = h2h_totals_end_of_month.rename(columns={'total_h2h_points': 'Total_Head_to_Head_FPL_Point'})
+            
+            # Deconstruct matches into individual results for FPL Points and Point Difference
+            monthly_matches = h2h_matches_df[h2h_matches_df['event'].isin(gws_in_month)]
             results_list = []
             for _, row in monthly_matches.iterrows():
-                # Result for player 1
-                results_list.append({
-                    'manager_id': row['entry_1_entry'],
-                    'gameweek': row['event'],
-                    'points': row['entry_1_points'],
-                    'h2h_points': 3 if row['entry_1_points'] > row['entry_2_points'] else (1 if row['entry_1_points'] == row['entry_2_points'] else 0),
-                    'opponent_score': row['entry_2_points']
-                })
-                # Result for player 2
-                results_list.append({
-                    'manager_id': row['entry_2_entry'],
-                    'gameweek': row['event'],
-                    'points': row['entry_2_points'],
-                    'h2h_points': 3 if row['entry_2_points'] > row['entry_1_points'] else (1 if row['entry_2_points'] == row['entry_1_points'] else 0),
-                    'opponent_score': row['entry_1_points']
-                })
+                results_list.append({'manager_id': row['entry_1_entry'], 'gameweek': row['event'], 'points': row['entry_1_points'], 'opponent_score': row['entry_2_points']})
+                results_list.append({'manager_id': row['entry_2_entry'], 'gameweek': row['event'], 'points': row['entry_2_points'], 'opponent_score': row['entry_1_points']})
             monthly_results_df = pd.DataFrame(results_list)
+
+            point_diff_calc = monthly_results_df.groupby('manager_id')[['points', 'opponent_score']].sum()
+            fpl_points_summary = point_diff_calc.reset_index()
+            fpl_points_summary['FPL_Point_Difference'] = fpl_points_summary['points'] - fpl_points_summary['opponent_score']
             
-            # Aggregate monthly totals
-            monthly_summary = monthly_results_df.groupby('manager_id').agg(
-                Total_Head_to_Head_FPL_Point=('h2h_points', 'sum'),
-                Total_FPL_Points=('points', 'sum')
-            ).reset_index()
-            monthly_summary['FPL_Point_Difference'] = monthly_results_df.groupby('manager_id').apply(lambda x: (x['points'] - x['opponent_score']).sum()).values
-            
-            # Pivot GW scores
+            final_month_df = monthly_summary.merge(fpl_points_summary[['manager_id', 'FPL_Point_Difference']], on='manager_id')
+
+            # Pivot GW scores to create 'vs' columns
             gw_scores_pivot = monthly_results_df.pivot(index='manager_id', columns='gameweek', values='points').fillna(0).astype(int)
-            gw_scores_pivot.columns = [f"GW{col}" for col in gw_scores_pivot.columns]
             opponent_scores_pivot = monthly_results_df.pivot(index='manager_id', columns='gameweek', values='opponent_score').fillna(0).astype(int)
             
-            # Create the 'GW1', 'GW2', etc. columns with 'vs' format
+            # First, combine the scores into the 'vs' format using integer column names
             for gw_col_num in gws_in_month:
-                gw_col_name = f"GW{gw_col_num}"
-                gw_scores_pivot[gw_col_name] = gw_scores_pivot[gw_col_name].astype(str) + " vs " + opponent_scores_pivot[gw_col_num].astype(str)
+                # Check if the integer column (e.g., 1, 2, 3) exists in both tables
+                if gw_col_num in gw_scores_pivot.columns and gw_col_num in opponent_scores_pivot.columns:
+                    # Modify the gw_scores_pivot table in place
+                    gw_scores_pivot[gw_col_num] = gw_scores_pivot[gw_col_num].astype(str) + " vs " + opponent_scores_pivot[gw_col_num].astype(str)
 
-            # Combine everything
-            final_month_df = manager_df.merge(monthly_summary, on='manager_id', how='left').fillna(0)
-            final_month_df = final_month_df.merge(gw_scores_pivot, on='manager_id', how='left').fillna('VS')
+            # Second, AFTER the loop is finished, rename the columns to the desired "GW1", "GW2" format
+            gw_scores_pivot.columns = [f"GW{col}" for col in gw_scores_pivot.columns]
+                        
+            final_month_df = manager_df.merge(final_month_df, on='manager_id', how='left').fillna(0)
+            final_month_df = final_month_df.merge(gw_scores_pivot, on='manager_id', how='left').fillna('0 vs 0')
             
+            final_month_df.sort_values(by=['Total_Head_to_Head_FPL_Point', 'FPL_Point_Difference'], ascending=[False, False], inplace=True)
             final_month_df['Standings'] = final_month_df['Total_Head_to_Head_FPL_Point'].rank(method='min', ascending=False).astype(int)
-            final_month_df.sort_values(by=['Standings', 'manager_name'], inplace=True)
+            
             final_month_df.rename(columns={'team_name': 'Team', 'manager_name': 'Manager'}, inplace=True)
             
             gw_cols = sorted([f"GW{gw}" for gw in gws_in_month])
-            column_order = ['Standings', 'Team', 'Manager', 'Total_Head_to_Head_FPL_Point', 'FPL_Point_Difference'] + gw_cols
-            worksheets_to_write[f"h2h_monthly_{month_name}"] = final_month_df[column_order]
-                
+            column_order = ['Standings', 'Team', 'Manager', 'Total_Head_to_Head_FPL_Point', 'FPL_Point_Difference'] + [col for col in gw_cols if col in final_month_df.columns]
+            worksheets_to_write[f"h2h_monthly_{month_name}"] = final_month_df[column_order]                                                                            
     # --- League Cup Winner ---
     # This award is only processed if the season has progressed far enough for the cup to be relevant.
     if last_finished_gw >= 34:
