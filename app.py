@@ -64,7 +64,12 @@ def inject_custom_css():
 
         /* Reduce font size for the metric value (winner's name) */
         div[data-testid="stMetricValue"] {
-            font-size: 1.75rem;
+            font-size: 2rem;
+        }
+
+        /* --- NEW: Reduce top padding of the main app container --- */
+        div.block-container {
+            padding-top: 3rem;
         }
         </style>
         """,
@@ -77,12 +82,16 @@ st.set_page_config(page_title="PepRoulette™ FPL Dashboard", layout="wide")
 # Inject custom fonts and styles
 inject_custom_css()
 
-# --- Use a URL for the logo and center it ---
-LOGO_URL = "https://raw.githubusercontent.com/thinesrao/deepsync/refs/heads/main/logo-word.svg" 
-col1, col2, col3 = st.columns([3,1,3])
-with col2:
-    st.image(LOGO_URL, width=100)
-
+# --- CHANGE: Use HTML/CSS for robust, mobile-friendly centering ---
+LOGO_URL = "https://raw.githubusercontent.com/thinesrao/deepsync/refs/heads/main/logo-word.svg"
+st.markdown(
+    f"""
+    <div style="display: flex; justify-content: center;">
+        <img src="{LOGO_URL}" alt="Logo" width="80">
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
 st.markdown("<h1 style='text-align: center;'>🏆 PepRoulette™ FPL Awards Dashboard 🏆</h1>", unsafe_allow_html=True)
 
