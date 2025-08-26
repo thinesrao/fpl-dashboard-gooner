@@ -5,7 +5,7 @@ name: FPL Data Pipeline
 on:
   # Run this workflow automatically on a schedule (every day at 8 AM UTC)
   schedule:
-    - cron: '0 14 * * *' # You can customize this. See https://crontab.guru/
+    - cron: '0 */6 * * *' # You can customize this. See https://crontab.guru/
   
   # This line is ESSENTIAL for the "Run workflow" button to appear
   workflow_dispatch:
