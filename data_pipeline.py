@@ -90,21 +90,6 @@ def get_gw_score_from_history(history, gw):
         return 0
     return next((item.get('total_points', 0) for item in history if item.get('round') == gw), 0)
 
-# --- THIS IS THE DEFINITIVE FIX: ROBUST RETRY MECHANISM ---
-def safe_api_call(api_call_func, max_retries=4, initial_delay=5):
-    """Wrapper to handle all API calls with exponential backoff for rate limiting."""
-    for attempt in range(max_retries):
-        try:
-            return api_call_func()
-        except (requests.exceptions.RequestException, gspread.exceptions.APIError) as e:
-            if hasattr(e, 'response') and e.response.status_code == 429:
-                wait_time = initial_delay * (2 ** attempt)
-                print(f"  API rate limit hit. Retrying in {wait_time} seconds... (Attempt {attempt + 1}/{max_retries})")
-                time.sleep(wait_time)
-            else:
-                # For other errors, we should fail immediately
-                raise e
-    raise Exception(f"API call failed after {max_retries} retries.")
 
 def main():
     print("--- Starting FPL Data Pipeline ---")
@@ -119,20 +104,16 @@ def main():
 
     spreadsheet = gc.open(GOOGLE_SHEET_NAME)
     print(f"Connected to Google Sheet: '{GOOGLE_SHEET_NAME}'")
-        
+    
     # --- END OF CORRECTED LOGIC BLOCK ---
     
 
+    fpl_data = get_json_from_url(BOOTSTRAP_STATIC_URL)
+    classic_league_data = get_json_from_url(CLASSIC_LEAGUE_URL)
+    h2h_league_data = get_json_from_url(H2H_LEAGUE_URL)
+    h2h_matches_data = get_json_from_url(H2H_MATCHES_URL)
+    if not all([fpl_data, classic_league_data, h2h_league_data, h2h_matches_data]): print("Failed to fetch base data. Exiting."); return
 
-    # --- EFFICIENT DATA FETCHING (FETCH ONCE) ---
-    print("Fetching all required data efficiently...")
-    fpl_data = safe_api_call(lambda: get_json_from_url(BOOTSTRAP_STATIC_URL))
-    classic_league_data = safe_api_call(lambda: get_json_from_url(CLASSIC_LEAGUE_URL))
-    h2h_league_data = safe_api_call(lambda: get_json_from_url(H2H_LEAGUE_URL))
-    h2h_matches_data = safe_api_call(lambda: get_json_from_url(H2H_MATCHES_URL))
-    
-    # ... (Pre-fetching for manager histories and transfers is also efficient as it runs once) ...
-    
     finished_gws = [gw['id'] for gw in fpl_data['events'] if gw['finished']]
     if not finished_gws: print("No gameweeks have finished yet. Exiting."); return
     last_finished_gw = max(finished_gws)
@@ -146,11 +127,19 @@ def main():
     
     player_id_to_type_map = elements_df.set_index('id')['element_type'].to_dict()
     
-    
     print("Pre-fetching manager histories, transfers, and player details...")
     manager_histories = {row['manager_id']: get_json_from_url(ENTRY_HISTORY_URL.format(TID=row['manager_id'])) for _, row in manager_df.iterrows()}
     manager_transfers = {row['manager_id']: get_json_from_url(ENTRY_TRANSFERS_URL.format(TID=row['manager_id'])) for _, row in manager_df.iterrows()}
     player_details_dict = {pid: get_json_from_url(ELEMENT_SUMMARY_URL.format(EID=pid)) for pid in elements_df['id']}
+
+    # --- THE DEFINITIVE TIME MACHINE (based on your superior logic) ---
+    print("Loading historical rank 'Time Machine' from Google Sheet...")
+    try:
+        time_machine_sheet = spreadsheet.worksheet("_time_machine_ranks")
+        time_machine_df = pd.DataFrame(time_machine_sheet.get_all_records())
+    except gspread.WorksheetNotFound:
+        print("  '_time_machine_ranks' not found. Will be created at the end of this run.")
+        time_machine_df = pd.DataFrame(columns=['gameweek', 'manager_id', 'manager_name', 'classic_rank', 'h2h_rank'])
     
     # --- Read the manual penalty data and create player name map ---
     print("Fetching manual penalty data...")
@@ -243,15 +232,20 @@ def main():
                 clean_sheets_gw = sum(next((p['stats'].get('clean_sheets', 0) for p in live_gw_data.get('elements', []) if p['id'] == p_id), 0) for p_id in active_squad_ids if elements_df[elements_df['id'] == p_id].iloc[0]['element_type'] in [1, 2, 3])
                 long_format_data["golden_glove"].append({'gameweek': gw, 'manager_name': manager_name, 'score': clean_sheets_gw})
 
-                captain_id = next((p['element'] for p in picks_data['picks'] if p['is_captain']), None)
-                vc_id = next((p['element'] for p in picks_data['picks'] if p['is_vice_captain']), None)
-                captain_minutes = player_details_dict.get(captain_id, {}).get('history', [])[gw-1].get('minutes', 0) if captain_id and len(player_details_dict.get(captain_id, {}).get('history', [])) >= gw else 0
+                # --- Best Vice-Captain (Corrected Logic) ---
                 vc_points = 0
-                if captain_minutes == 0 and vc_id: vc_points = 0
-                elif vc_id: vc_points = player_details_dict.get(vc_id, {}).get('history', [])[gw-1].get('total_points', 0) if len(player_details_dict.get(vc_id, {}).get('history', [])) >= gw else 0
-                long_format_data['best_vc'].append({'gameweek': gw, 'manager_name': manager_name, 'score': vc_points})
+                # Find the Vice-Captain's player ID for the gameweek
+                vc_id = next((p['element'] for p in picks_data['picks'] if p['is_vice_captain']), None)
+                
+                # If a Vice-Captain was chosen, get their normal, single FPL points for that gameweek
+                if vc_id:
+                    vc_history = player_details_dict.get(vc_id, {}).get('history', [])
+                    # Safely get the score for the current gameweek
+                    vc_points = get_gw_score_from_history(vc_history, gw)
 
-# --- Transfer King (with Wildcard / Free Hit exclusion) ---
+                long_format_data['best_vc'].append({'gameweek': gw, 'manager_name': manager_name, 'score': vc_points})
+                
+                # --- Transfer King (with Wildcard / Free Hit exclusion) ---
                 transfer_score_gw = 0
                 history_data = manager_histories.get(manager_id, {})
                 
@@ -311,25 +305,40 @@ def main():
                 
                 long_format_data['penalty_king'].append({'gameweek': gw, 'manager_name': manager_name, 'score': penalty_score_gw})
                 
-                # --- Best Underdog: CORRECTED & ROBUST GW-by-GW LOGIC ---                                                
+                # --- Best Underdog (Definitive Self-Sufficient Logic) ---
                 underdog_score = 0
-                if gw > 1:
+                if gw > 1 and not time_machine_df.empty:
                     h2h_matches_df = pd.DataFrame(h2h_matches_data.get('results', []))
                     match = h2h_matches_df[((h2h_matches_df['event'] == gw) & (h2h_matches_df['entry_1_entry'] == manager_id)) | ((h2h_matches_df['event'] == gw) & (h2h_matches_df['entry_2_entry'] == manager_id))]
+                    
                     if not match.empty:
                         match = match.iloc[0]
                         opponent_id = None
-                        if match['entry_1_entry'] == manager_id and match['entry_1_points'] > match['entry_2_points']: opponent_id = match['entry_2_entry']
-                        elif match['entry_2_entry'] == manager_id and match['entry_2_points'] > match['entry_1_points']: opponent_id = match['entry_1_entry']
+                        
+                        if match['entry_1_entry'] == manager_id and match['entry_1_points'] > match['entry_2_points']:
+                            opponent_id = match['entry_2_entry']
+                        elif match['entry_2_entry'] == manager_id and match['entry_2_points'] > match['entry_1_points']:
+                            opponent_id = match['entry_1_entry']
                         
                         if opponent_id:
-                            opp_classic_rank, opp_h2h_rank = classic_ranks_prev.get(opponent_id, 999), h2h_ranks_prev.get(opponent_id, 999)
-                            if (opp_classic_rank == 1 and opp_h2h_rank == 1): underdog_score = 3
-                            elif (opp_classic_rank == 1 or opp_h2h_rank == 1): underdog_score = 2
-                            elif (2 <= opp_classic_rank <= 4 or 2 <= opp_h2h_rank <= 4): underdog_score = 1
+                            # Use the 'Time Machine' to get the opponent's rank from the PREVIOUS gameweek
+                            prev_gw_ranks = time_machine_df[time_machine_df['gameweek'] == gw - 1]
+                            opponent_ranks = prev_gw_ranks[prev_gw_ranks['manager_id'] == opponent_id]
+                            
+                            if not opponent_ranks.empty:
+                                opp_classic_rank_prev = opponent_ranks.iloc[0]['classic_rank']
+                                opp_h2h_rank_prev = opponent_ranks.iloc[0]['h2h_rank']
+                                
+                                # Apply the scoring hierarchy correctly
+                                if (opp_classic_rank_prev == 1 and opp_h2h_rank_prev == 1):
+                                    underdog_score = 3
+                                elif (opp_classic_rank_prev == 1 or opp_h2h_rank_prev == 1):
+                                    underdog_score = 2
+                                elif (2 <= opp_classic_rank_prev <= 4 or 2 <= opp_h2h_rank_prev <= 4):
+                                    underdog_score = 1
+                                    
                 long_format_data['best_underdog'].append({'gameweek': gw, 'manager_name': manager_name, 'score': underdog_score})
-
-        
+                                        
         print(f"  Processed Gameweek {gw}/{last_finished_gw}")
         if gw < last_finished_gw: time.sleep(1)
 
@@ -616,39 +625,48 @@ def main():
         ])
         worksheets_to_write["cup_winner"] = cup_df
 
+    # --- Update the Time Machine for the next run ---
+    print("Updating the '_time_machine_ranks' sheet...")
+    
+    classic_ranks_now = {s['entry']: s['rank'] for s in classic_league_data.get('standings', {}).get('results', [])}
+    h2h_ranks_now = {s['entry']: s['rank'] for s in h2h_league_data.get('standings', {}).get('results', [])}
+    
+    # Remove any old data for the current gameweek to prevent duplicates
+    time_machine_df = time_machine_df[time_machine_df['gameweek'] != last_finished_gw]
+    
+    # Create new rows for the current gameweek's final ranks
+    new_ranks_list = []
+    for _, manager in manager_df.iterrows():
+        manager_id = manager['manager_id']
+        new_ranks_list.append({
+            'gameweek': last_finished_gw,
+            'manager_id': manager_id,
+            'manager_name': manager['manager_name'],
+            'classic_rank': classic_ranks_now.get(manager_id, 999),
+            'h2h_rank': h2h_ranks_now.get(manager_id, 999)
+        })
+    
+    new_ranks_df = pd.DataFrame(new_ranks_list)
+    
+    # Combine old and new data and save
+    updated_time_machine_df = pd.concat([time_machine_df, new_ranks_df]).sort_values(by=['gameweek', 'classic_rank'])
+    worksheets_to_write["_time_machine_ranks"] = updated_time_machine_df
+
     metadata_df = pd.DataFrame([{'last_finished_gw': last_finished_gw, 'last_updated_utc': datetime.now(timezone.utc).isoformat()}])
     worksheets_to_write["metadata"] = metadata_df
 
-    # --- Writing all processed data to Google Sheets (DEFINITIVE, EFFICIENT LOGIC) ---
     print("Writing all processed data to Google Sheets...")
-
-    # Fetch all existing worksheet titles in a single API call for efficiency
-    existing_worksheets = {ws.title for ws in spreadsheet.worksheets()}
-    print(f"  Found {len(existing_worksheets)} existing worksheets.")
-
     for name, df in worksheets_to_write.items():
-        if df is None or df.empty:
-            print(f"  Skipping '{name}' as it has no data.")
-            continue
-
-        if name in existing_worksheets:
-            # If the sheet exists, get it and clear it
+        try:
             worksheet = spreadsheet.worksheet(name)
             worksheet.clear()
-            print(f"  Cleared existing worksheet: '{name}'")
-        else:
-            # If it doesn't exist, create it
+        except gspread.WorksheetNotFound:
             worksheet = spreadsheet.add_worksheet(title=name, rows=len(df) + 1, cols=len(df.columns) + 1)
-            print(f"  Created new worksheet: '{name}'")
-        
-        # Write the DataFrame to the sheet
         set_with_dataframe(worksheet, df, include_index=False)
-        print(f"  Successfully wrote data to '{name}'.")
-        
-        # A short, polite pause between WRITE operations is still good practice
-        time.sleep(2)
+        print(f"  Successfully wrote to '{name}' worksheet.")
+        time.sleep(3)
 
     print("--- Pipeline finished successfully! ---")
-    
+
 if __name__ == "__main__":
     main()
