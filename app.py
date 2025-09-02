@@ -9,6 +9,38 @@ import plotly.express as px
 # --- Configuration & Connection ---
 GOOGLE_SHEET_NAME = "FPL-Data-Pep"
 
+
+# --- THIS IS THE DEFINITIVE FIX: ROBUST RETRY MECHANISM ---
+def safe_gspread_api_call(api_call_func, max_retries=3, initial_delay=2):
+    """Wrapper to handle gspread API calls with exponential backoff."""
+    for attempt in range(max_retries):
+        try:
+            return api_call_func()
+        except APIError as e:
+            if e.response.status_code == 429:
+                wait_time = initial_delay * (2 ** attempt)
+                time.sleep(wait_time)
+            else:
+                raise e
+    raise Exception("Gspread API call failed after multiple retries.")
+
+@st.cache_resource(ttl=600)
+def connect_to_gsheet():
+    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    creds_info = st.secrets["gcp_service_account"]
+    creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
+    client = gspread.authorize(creds)
+    return safe_gspread_api_call(lambda: client.open(GOOGLE_SHEET_NAME))
+
+@st.cache_data(ttl=600)
+def read_from_gsheet(worksheet_name):
+    try:
+        spreadsheet = connect_to_gsheet()
+        worksheet = safe_gspread_api_call(lambda: spreadsheet.worksheet(worksheet_name))
+        return pd.DataFrame(safe_gspread_api_call(lambda: worksheet.get_all_records()))
+    except WorksheetNotFound:
+        return None
+
 @st.cache_resource(ttl=600)
 def connect_to_gsheet():
     """Connects to the Google Sheets API and returns the spreadsheet object."""

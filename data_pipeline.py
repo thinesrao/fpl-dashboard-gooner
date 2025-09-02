@@ -90,6 +90,22 @@ def get_gw_score_from_history(history, gw):
         return 0
     return next((item.get('total_points', 0) for item in history if item.get('round') == gw), 0)
 
+# --- THIS IS THE DEFINITIVE FIX: ROBUST RETRY MECHANISM ---
+def safe_api_call(api_call_func, max_retries=4, initial_delay=5):
+    """Wrapper to handle all API calls with exponential backoff for rate limiting."""
+    for attempt in range(max_retries):
+        try:
+            return api_call_func()
+        except (requests.exceptions.RequestException, gspread.exceptions.APIError) as e:
+            if hasattr(e, 'response') and e.response.status_code == 429:
+                wait_time = initial_delay * (2 ** attempt)
+                print(f"  API rate limit hit. Retrying in {wait_time} seconds... (Attempt {attempt + 1}/{max_retries})")
+                time.sleep(wait_time)
+            else:
+                # For other errors, we should fail immediately
+                raise e
+    raise Exception(f"API call failed after {max_retries} retries.")
+
 def main():
     print("--- Starting FPL Data Pipeline ---")
     # --- THIS IS THE CORRECTED LOGIC BLOCK ---
@@ -103,16 +119,20 @@ def main():
 
     spreadsheet = gc.open(GOOGLE_SHEET_NAME)
     print(f"Connected to Google Sheet: '{GOOGLE_SHEET_NAME}'")
-    
+        
     # --- END OF CORRECTED LOGIC BLOCK ---
     
 
-    fpl_data = get_json_from_url(BOOTSTRAP_STATIC_URL)
-    classic_league_data = get_json_from_url(CLASSIC_LEAGUE_URL)
-    h2h_league_data = get_json_from_url(H2H_LEAGUE_URL)
-    h2h_matches_data = get_json_from_url(H2H_MATCHES_URL)
-    if not all([fpl_data, classic_league_data, h2h_league_data, h2h_matches_data]): print("Failed to fetch base data. Exiting."); return
 
+    # --- EFFICIENT DATA FETCHING (FETCH ONCE) ---
+    print("Fetching all required data efficiently...")
+    fpl_data = safe_api_call(lambda: get_json_from_url(BOOTSTRAP_STATIC_URL))
+    classic_league_data = safe_api_call(lambda: get_json_from_url(CLASSIC_LEAGUE_URL))
+    h2h_league_data = safe_api_call(lambda: get_json_from_url(H2H_LEAGUE_URL))
+    h2h_matches_data = safe_api_call(lambda: get_json_from_url(H2H_MATCHES_URL))
+    
+    # ... (Pre-fetching for manager histories and transfers is also efficient as it runs once) ...
+    
     finished_gws = [gw['id'] for gw in fpl_data['events'] if gw['finished']]
     if not finished_gws: print("No gameweeks have finished yet. Exiting."); return
     last_finished_gw = max(finished_gws)
@@ -599,16 +619,17 @@ def main():
     metadata_df = pd.DataFrame([{'last_finished_gw': last_finished_gw, 'last_updated_utc': datetime.now(timezone.utc).isoformat()}])
     worksheets_to_write["metadata"] = metadata_df
 
+    # --- WRITING LOOP (with retry logic built into safe_api_call) ---
     print("Writing all processed data to Google Sheets...")
     for name, df in worksheets_to_write.items():
         try:
-            worksheet = spreadsheet.worksheet(name)
-            worksheet.clear()
+            worksheet = safe_api_call(lambda: spreadsheet.worksheet(name))
+            safe_api_call(lambda: worksheet.clear())
         except gspread.WorksheetNotFound:
-            worksheet = spreadsheet.add_worksheet(title=name, rows=len(df) + 1, cols=len(df.columns) + 1)
-        set_with_dataframe(worksheet, df, include_index=False)
+            worksheet = safe_api_call(lambda: spreadsheet.add_worksheet(title=name, rows=len(df) + 1, cols=len(df.columns) + 1))
+        
+        safe_api_call(lambda: set_with_dataframe(worksheet, df, include_index=False))
         print(f"  Successfully wrote to '{name}' worksheet.")
-        time.sleep(3)
 
     print("--- Pipeline finished successfully! ---")
 
