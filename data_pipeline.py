@@ -619,19 +619,36 @@ def main():
     metadata_df = pd.DataFrame([{'last_finished_gw': last_finished_gw, 'last_updated_utc': datetime.now(timezone.utc).isoformat()}])
     worksheets_to_write["metadata"] = metadata_df
 
-    # --- WRITING LOOP (with retry logic built into safe_api_call) ---
+    # --- Writing all processed data to Google Sheets (DEFINITIVE, EFFICIENT LOGIC) ---
     print("Writing all processed data to Google Sheets...")
+
+    # Fetch all existing worksheet titles in a single API call for efficiency
+    existing_worksheets = {ws.title for ws in spreadsheet.worksheets()}
+    print(f"  Found {len(existing_worksheets)} existing worksheets.")
+
     for name, df in worksheets_to_write.items():
-        try:
-            worksheet = safe_api_call(lambda: spreadsheet.worksheet(name))
-            safe_api_call(lambda: worksheet.clear())
-        except gspread.WorksheetNotFound:
-            worksheet = safe_api_call(lambda: spreadsheet.add_worksheet(title=name, rows=len(df) + 1, cols=len(df.columns) + 1))
+        if df is None or df.empty:
+            print(f"  Skipping '{name}' as it has no data.")
+            continue
+
+        if name in existing_worksheets:
+            # If the sheet exists, get it and clear it
+            worksheet = spreadsheet.worksheet(name)
+            worksheet.clear()
+            print(f"  Cleared existing worksheet: '{name}'")
+        else:
+            # If it doesn't exist, create it
+            worksheet = spreadsheet.add_worksheet(title=name, rows=len(df) + 1, cols=len(df.columns) + 1)
+            print(f"  Created new worksheet: '{name}'")
         
-        safe_api_call(lambda: set_with_dataframe(worksheet, df, include_index=False))
-        print(f"  Successfully wrote to '{name}' worksheet.")
+        # Write the DataFrame to the sheet
+        set_with_dataframe(worksheet, df, include_index=False)
+        print(f"  Successfully wrote data to '{name}'.")
+        
+        # A short, polite pause between WRITE operations is still good practice
+        time.sleep(2)
 
     print("--- Pipeline finished successfully! ---")
-
+    
 if __name__ == "__main__":
     main()
