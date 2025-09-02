@@ -5,41 +5,10 @@ import gspread
 from google.oauth2.service_account import Credentials
 from gspread.exceptions import SpreadsheetNotFound, WorksheetNotFound, APIError
 import plotly.express as px
+from datetime import datetime, timezone
 
 # --- Configuration & Connection ---
 GOOGLE_SHEET_NAME = "FPL-Data-Pep"
-
-
-# --- THIS IS THE DEFINITIVE FIX: ROBUST RETRY MECHANISM ---
-def safe_gspread_api_call(api_call_func, max_retries=3, initial_delay=2):
-    """Wrapper to handle gspread API calls with exponential backoff."""
-    for attempt in range(max_retries):
-        try:
-            return api_call_func()
-        except APIError as e:
-            if e.response.status_code == 429:
-                wait_time = initial_delay * (2 ** attempt)
-                time.sleep(wait_time)
-            else:
-                raise e
-    raise Exception("Gspread API call failed after multiple retries.")
-
-@st.cache_resource(ttl=600)
-def connect_to_gsheet():
-    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    creds_info = st.secrets["gcp_service_account"]
-    creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
-    client = gspread.authorize(creds)
-    return safe_gspread_api_call(lambda: client.open(GOOGLE_SHEET_NAME))
-
-@st.cache_data(ttl=600)
-def read_from_gsheet(worksheet_name):
-    try:
-        spreadsheet = connect_to_gsheet()
-        worksheet = safe_gspread_api_call(lambda: spreadsheet.worksheet(worksheet_name))
-        return pd.DataFrame(safe_gspread_api_call(lambda: worksheet.get_all_records()))
-    except WorksheetNotFound:
-        return None
 
 @st.cache_resource(ttl=600)
 def connect_to_gsheet():
@@ -125,7 +94,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.markdown("<h1 style='text-align: center;'>🏆 PepRoulette™ FPL Awards Dashboard 🏆</h1>", unsafe_allow_html=True)
+st.markdown("<h3 style='text-align: center;'>🏆 PepRoulette™ FPL Dashboard 🏆</h3>", unsafe_allow_html=True)
 
 try:
     all_data = load_all_data()
@@ -136,8 +105,28 @@ try:
     else:
         metadata = metadata_df.iloc[0]
         last_gw = metadata['last_finished_gw']
-        st.markdown(f"<h5 style='text-align: center;'>Awards calculated up to Gameweek {last_gw}</h5>", unsafe_allow_html=True)
+        last_updated_utc_str = metadata['last_updated_utc']
+        
+        # --- THIS IS THE NEW LOGIC BLOCK ---
+        # Convert the ISO string from the sheet into a datetime object
+        # The 'Z' at the end of older FPL timestamps means UTC, which fromisoformat handles
+        dt_object = datetime.fromisoformat(last_updated_utc_str.replace('Z', '+00:00'))
+        
+        # Format the datetime object into a highly readable string
+        # Example: "Sep 02 2025, 10:30 PM"
+        readable_timestamp = dt_object.strftime("%d %b %Y, %I:%M %p")
 
+        # Display the gameweek and the last updated time in a clean, centered format
+        st.markdown(
+            f"""
+            <div style='text-align: center;'>
+                <h5>Awards calculated up to Gameweek {last_gw}</h5>
+                <p><small>Last Updated: {readable_timestamp} (UTC)</small></p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+                
         all_sheets = list(all_data.keys())
 
         SPECIAL_AWARD_CONFIG = {
