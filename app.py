@@ -112,7 +112,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.markdown("<h3 style='text-align: center;'>🏆 槍迷之家超級聯賽 FPL Dashboard 🏆</h3>", unsafe_allow_html=True)
+st.markdown("<h3 style='text-align: center;'>🏆 槍迷之家超級聯賽 FPL Season 6 🏆</h3>", unsafe_allow_html=True)
 
 try:
         # --- Data Loading with a Progress Bar ---
@@ -182,7 +182,7 @@ try:
             gw_range = (1, 1)
             st.sidebar.info("📊 Range slider for charts will be available from Gameweek 2 onwards.")
 
-        tab_standard, tab_special, tab_details = st.tabs(["🏆 Standard Awards", "🏅 Special Awards", "📊 Detailed Standings"])
+        tab_standard, tab_special, tab_details = st.tabs(["🏆 Standard Awards", "🏅 Special Records", "📊 Detailed Standings"])
 
         with tab_standard:
             st.markdown("### 🏆 League Standings & Main Awards")
@@ -244,7 +244,7 @@ try:
 
 
         with tab_special:
-            st.markdown("### Special Award Winners")
+            st.markdown("### Special Record Breakers")
             special_award_sheets = {name: all_data.get(name) for name in SPECIAL_AWARD_CONFIG.keys()}
             cols = st.columns(4)
             col_idx = 0
@@ -271,7 +271,7 @@ try:
                     col_idx += 1
 
         with tab_details:
-            st.markdown("### Detailed Award Standings")
+            st.markdown("### Detailed Standings")
             st.info(f"📈 Showing cumulative progression for Gameweeks {gw_range[0]} to {gw_range[1]}")
             special_award_sheets = {name: all_data.get(name) for name in SPECIAL_AWARD_CONFIG.keys()}
             for name, (title, _) in SPECIAL_AWARD_CONFIG.items():
