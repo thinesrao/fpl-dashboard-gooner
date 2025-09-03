@@ -402,15 +402,19 @@ def main():
              worksheets_to_write[award_name] = df[['Standings', 'Team', 'Manager', 'Score']]
 
     # Process Standard Awards
+    # --- Corrected Gameweek Score Calculation (with transfer costs) ---
     gw_scores_list = []
     for m_id, hist in manager_histories.items():
         if hist and 'current' in hist:
             for h in hist['current']:
-                gw_scores_list.append({'manager_id': m_id, 'gameweek': h['event'], 'score': h['points']})
+                # The corrected calculation: points - event_transfers_cost
+                true_gw_score = h.get('points', 0) - h.get('event_transfers_cost', 0)
+                gw_scores_list.append({'manager_id': m_id, 'gameweek': h['event'], 'score': true_gw_score})
+    
     gw_scores_df = pd.DataFrame(gw_scores_list)
     gw_scores_wide = gw_scores_df.pivot(index='manager_id', columns='gameweek', values='score').fillna(0).astype(int)
     gw_scores_wide.columns = [f"GW{col}" for col in gw_scores_wide.columns]
-    
+        
     classic_standings_df = pd.DataFrame(classic_league_data['standings']['results'])[['rank', 'entry_name', 'player_name', 'total', 'entry']]
     classic_standings_df.rename(columns={'rank': 'Standings', 'entry_name': 'Team', 'player_name': 'Manager', 'total': 'Total', 'entry': 'manager_id'}, inplace=True)
     classic_standings_df = classic_standings_df.merge(gw_scores_wide, on='manager_id', how='left').drop(columns=['manager_id'])
@@ -487,14 +491,18 @@ def main():
         # --- THIS IS THE FIX ---
         weekly_winners_final_df.rename(columns={'gameweek': 'Gameweek'}, inplace=True)
         worksheets_to_write["weekly_manager_log"] = weekly_winners_final_df    
+    # --- Corrected Monthly Score Calculation (with transfer costs) ---
     all_gw_scores_list = []
     for manager_id, history in manager_histories.items():
         if history and 'current' in history:
             for gw_data in history['current']:
-                all_gw_scores_list.append({'gameweek': gw_data['event'], 'manager_id': manager_id, 'score': gw_data['points']})
+                # The corrected calculation: points - event_transfers_cost
+                true_gw_score = gw_data.get('points', 0) - gw_data.get('event_transfers_cost', 0)
+                all_gw_scores_list.append({'gameweek': gw_data['event'], 'manager_id': manager_id, 'score': true_gw_score})
+    
     all_gw_scores_df = pd.DataFrame(all_gw_scores_list)
     all_gw_scores_df['month'] = all_gw_scores_df['gameweek'].map(gw_month_map)
-
+    
     if not all_gw_scores_df.empty:
         classic_monthly_scores = all_gw_scores_df.groupby(['month', 'manager_id'])['score'].sum().reset_index()
         for month_name in classic_monthly_scores['month'].unique():
