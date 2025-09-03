@@ -95,7 +95,7 @@ def inject_custom_css():
     )
 
 # --- Main App Logic ---
-st.set_page_config(page_title="PepRoulette™ FPL Dashboard", layout="wide")
+st.set_page_config(page_title="槍迷之家超級聯賽 FPL Dashboard", layout="wide")
 
 # Inject custom fonts and styles
 inject_custom_css()
