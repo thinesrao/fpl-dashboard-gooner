@@ -6,6 +6,7 @@ from google.oauth2.service_account import Credentials
 from gspread.exceptions import SpreadsheetNotFound, WorksheetNotFound, APIError
 import plotly.express as px
 from datetime import datetime, timezone
+import time
 
 # --- Configuration & Connection ---
 GOOGLE_SHEET_NAME = "FPL-Data-Gooner"
@@ -38,7 +39,7 @@ def gspread_api_call(api_call_func, max_retries=5, initial_delay=3):
                 raise e # For other API errors, fail immediately
     raise Exception(f"Gspread API call failed after {max_retries} retries.")
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=600, show_spinner=False)
 def load_all_data():
     """
     Loads all worksheets in a single, efficient, and robust batch operation.
@@ -114,7 +115,17 @@ st.markdown(
 st.markdown("<h3 style='text-align: center;'>🏆 槍迷之家超級聯賽 FPL Dashboard 🏆</h3>", unsafe_allow_html=True)
 
 try:
+        # --- Data Loading with a Progress Bar ---
+    progress_text = "Loading all award data. Please wait..."
+    my_bar = st.progress(0, text=progress_text)
+
+    # Wrap the slow data loading function with the progress bar
     all_data = load_all_data()
+
+    # Once data is loaded, update the progress bar to 100% and then remove it
+    my_bar.progress(100, text="Data loaded successfully!")
+    time.sleep(1) # Give a moment for the user to see "Success"
+    my_bar.empty()
 
     metadata_df = all_data.get("metadata")
     if metadata_df is None or metadata_df.empty:
@@ -155,7 +166,7 @@ try:
             "dream_team": ["🌟 Dream Team King", "DT Score"], "shooting_stars": ["🌠 Shooting Stars", "Rank Rise"],
             "defensive_king": ["🧱 Defensive King", "Contribution"], 
             "penalty_king": ["🎯 Penalty King", "Pts"], "steady_king": ["🧘 Steady King", "Pts/Transfer"],
-            "highest_gw_score": ["🚀 Highest GW Score", "Pts"], "freehit_king": ["🃏 Free Hit King", "Pts"],
+            "freehit_king": ["🃏 Free Hit King", "Pts"],
             "benchboost_king": ["📈 Bench Boost King", "Pts"], "triplecaptain_king": ["©️³ Triple Captain King", "Pts"]
         }
 
@@ -174,55 +185,64 @@ try:
         tab_standard, tab_special, tab_details = st.tabs(["🏆 Standard Awards", "🏅 Special Awards", "📊 Detailed Standings"])
 
         with tab_standard:
-            st.markdown("### League Standings & Core Awards")
-            with st.container(border=True):
-                    st.markdown("#### Classic League Top 10")
+            st.markdown("### 🏆 League Standings & Main Awards")
+            
+            # --- New "Command Center" Layout ---
+            col_main, col_sidebar = st.columns([2.5, 1]) # Main column is 2.5x wider
+
+            # --- Main Column: The League Race Chart ---
+            with col_main:
+                with st.container(border=True):
+                    st.markdown("#### Classic League Race")
                     if classic_standings is not None and not classic_standings.empty:
                         try:
-                            # --- ROBUST FIX: Explicitly define the points column name ---
-                            # --- Change 'Total' to match your sheet's column header for points ---
                             points_column_name = 'Total'
-                            
                             cs_copy = classic_standings.copy()
                             cs_copy[points_column_name] = pd.to_numeric(cs_copy[points_column_name], errors='coerce')
                             
                             top_10_classic = cs_copy.head(10)
                             
-                            fig = px.bar(top_10_classic, x=points_column_name, y='Manager', orientation='h', title="Classic League Race", text=points_column_name)
-                            
-                            fig.update_layout(
-                                yaxis_title="", 
-                                xaxis_title="Total Points", 
-                                showlegend=False, 
-                                height=400, 
-                                plot_bgcolor='rgba(0,0,0,0)', 
-                                paper_bgcolor='rgba(0,0,0,0)',
-                                yaxis={'autorange': 'reversed'}
+                            fig = px.bar(
+                                top_10_classic, x=points_column_name, y='Manager', orientation='h',
+                                title="Current Top 10", text=points_column_name
                             )
-                            fig.update_traces(marker_color='#2bfca4', textposition='inside')
+                            fig.update_layout(
+                                yaxis_title="", xaxis_title="Total Points", showlegend=False, height=500,
+                                plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                                yaxis={'autorange': 'reversed'}, # Puts #1 at the top
+                                font=dict(color="white"),
+                                title_font_size=20
+                            )
+                            fig.update_traces(marker_color='#2bfca4', textposition='inside', textfont=dict(color='#0D1117', family="Archivo Black"))
                             st.plotly_chart(fig, use_container_width=True)
-                        except (KeyError, IndexError):
-                            st.error(f"⚠️ **Error processing Classic League data.**\n\n"
-                                     f"Could not find the points column: '{points_column_name}'.\n\n"
-                                     f"**Available columns found:** `{list(classic_standings.columns)}`")
+                        except Exception as e:
+                            st.error(f"⚠️ Error creating Classic League chart: {e}")
 
-            cup_winner_df = all_data.get("cup_winner")
-            if last_gw >= 34 and cup_winner_df is not None and not cup_winner_df.empty:
+            # --- Sidebar Column: The Intel Briefing ---
+            with col_sidebar:
+                # Card 1: Recent Weekly Winners Log
                 with st.container(border=True):
-                    st.metric("League Cup Champion", cup_winner_df.iloc[0]['Winner'])
-
-            with st.container(border=True):
-                st.markdown("#### Monthly & Weekly Winners")
-                sub_tab_classic, sub_tab_weekly = st.tabs(["Classic Monthly", "Manager of the Week"])
-                with sub_tab_classic:
-                    classic_monthly_sheets = sorted([s for s in all_sheets if s.startswith('classic_monthly_')])
-                    for sheet_name in classic_monthly_sheets:
-                        st.markdown(f"##### {sheet_name.replace('classic_monthly_', '').replace('_', ' ').title()}")
-                        df = all_data.get(sheet_name)
-                        if df is not None: st.dataframe(df.set_index('Standings'), use_container_width=True)
-                with sub_tab_weekly:
+                    st.markdown("##### 👑Manager of The Week")
                     weekly_log = all_data.get("weekly_manager_log")
-                    if weekly_log is not None: st.dataframe(weekly_log.set_index('Gameweek'), use_container_width=True)
+                    if weekly_log is not None and not weekly_log.empty:
+                        # Show a clean, compact log of recent winners
+                        recent_winners = weekly_log.sort_values(by='Gameweek', ascending=False).head(5)
+                        st.dataframe(
+                            recent_winners[['Gameweek', 'Manager', 'Score']].set_index('Gameweek'),
+                            use_container_width=True
+                        )
+                # Card 2: Highest GW Score
+                with st.container(border=True):
+                    st.markdown("##### 🚀 Highest GW Score")
+                    highest_score_df = all_data.get("highest_gw_score")
+                    if highest_score_df is not None and not highest_score_df.empty:
+                        leader = highest_score_df.iloc[0]
+                        st.metric("All-Time High Score", leader['Manager'], f"{leader['Score']} Pts")
+                
+                st.markdown("---", unsafe_allow_html=True)
+
+
+
         with tab_special:
             st.markdown("### Special Award Winners")
             special_award_sheets = {name: all_data.get(name) for name in SPECIAL_AWARD_CONFIG.keys()}
