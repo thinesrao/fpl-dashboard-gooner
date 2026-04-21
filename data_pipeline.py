@@ -12,6 +12,11 @@ import os
 CLASSIC_LEAGUE_ID = 164188
 GOOGLE_SHEET_NAME = "FPL-Data-Gooner"
 
+# --- Headers to prevent blocking by FPL API ---
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
+
 # --- API Endpoints ---
 FPL_API_URL = "https://fantasy.premierleague.com/api/"
 BOOTSTRAP_STATIC_URL = f"{FPL_API_URL}bootstrap-static/"
@@ -25,7 +30,7 @@ ELEMENT_SUMMARY_URL = f"{FPL_API_URL}element-summary/{{EID}}/"
 
 # --- Helper Functions ---
 def get_secrets():
-    """Loads secrets from environment variables or a local secrets.toml file."""
+    \"\"\"Loads secrets from environment variables or a local secrets.toml file.\"\"\"
     # Try to load from Streamlit secrets (for deployed app, although not used here) or GitHub Actions env vars
     gcp_creds = os.getenv("GCP_CREDENTIALS")
     
@@ -53,8 +58,8 @@ def get_credentials(gcp_creds_dict):
         print("ERROR: GCP credentials not found in secrets.toml or environment variables.")
         return None
     
-def get_json_from_url(url, headers=None):
-    """Generic function to get JSON from a URL, now with header support."""
+def get_json_from_url(url, headers=HEADERS):
+    \"\"\"Generic function to get JSON from a URL, now with default header support.\"\"\"
     try:
         response = requests.get(url, timeout=15, headers=headers)
         response.raise_for_status()
@@ -62,6 +67,16 @@ def get_json_from_url(url, headers=None):
     except requests.exceptions.RequestException as e:
         print(f"Error fetching {url}: {e}")
         return None
+
+def get_player_score_from_live(live_data, player_id):
+    \"\"\"Safely extracts total_points for a player from gameweek-live data.\"\"\"
+    if not live_data or 'elements' not in live_data:
+        return 0
+    # The 'elements' in live data is a list of dicts, each with 'id' and 'stats'
+    player_data = next((p for p in live_data['elements'] if p['id'] == player_id), None)
+    if player_data and 'stats' in player_data:
+        return player_data['stats'].get('total_points', 0)
+    return 0
     
 def get_active_squad_ids(picks_data):
     if not picks_data or 'picks' not in picks_data: return []
@@ -79,33 +94,33 @@ def get_gameweek_to_month_map(fpl_data):
     return gw_map
 
 def get_gw_score_from_history(history, gw):
-    """Safely gets a score from a player's history list for a specific gameweek."""
+    \"\"\"Safely gets a score from a player's history list for a specific gameweek.\"\"\"
     if not history:
         return 0
     return next((item.get('total_points', 0) for item in history if item.get('round') == gw), 0)
 
 # --- ERROR-HANDLE HELPER FUNCTION ---
 def gspread_api_call(api_call_func, max_retries=5, initial_delay=5):
-    """
+    \"\"\"
     Wrapper to handle all gspread API calls with exponential backoff for rate limiting.
-    """
+    \"\"\"
     for attempt in range(max_retries):
         try:
             return api_call_func()
         except gspread.exceptions.APIError as e:
-            # Check if the error is specifically a 429 "Quota Exceeded" error
+            # Check if the error is specifically a 429 \"Quota Exceeded\" error
             if e.response.status_code == 429:
                 wait_time = initial_delay * (2 ** attempt)  # Exponential backoff: 5s, 10s, 20s, 40s, 80s
-                print(f"  API rate limit hit. Retrying in {wait_time} seconds... (Attempt {attempt + 1}/{max_retries})")
+                print(f\"  API rate limit hit. Retrying in {wait_time} seconds... (Attempt {attempt + 1}/{max_retries})\")
                 time.sleep(wait_time)
             else:
                 # For any other API error, we should fail immediately
                 raise e
     # If all retries fail, raise the last exception
-    raise Exception(f"Gspread API call failed after {max_retries} retries.")
+    raise Exception(f\"Gspread API call failed after {max_retries} retries.\")
 
 def main():
-    print("--- Starting FPL Data Pipeline ---")
+    print(\"--- Starting FPL Data Pipeline ---\")
     # --- THIS IS THE CORRECTED LOGIC BLOCK ---
     gcp_creds = get_secrets()
     if not gcp_creds:
@@ -116,7 +131,7 @@ def main():
         return # Exit if authentication fails
 
     spreadsheet = gspread_api_call(lambda: gc.open(GOOGLE_SHEET_NAME))
-    print(f"Connected to Google Sheet: '{GOOGLE_SHEET_NAME}'")
+    print(f\"Connected to Google Sheet: '{GOOGLE_SHEET_NAME}'\")
     
     # --- END OF CORRECTED LOGIC BLOCK ---
     
@@ -124,17 +139,17 @@ def main():
     # --- Fetching base data with pagination for Classic League ---
     fpl_data = get_json_from_url(BOOTSTRAP_STATIC_URL)
 
-    print("Fetching classic league standings with pagination...")
+    print(\"Fetching classic league standings with pagination...\")
     page = 1
     all_managers_list = []
     classic_league_data_template = None
     
     while True:
-        paginated_url = f"{CLASSIC_LEAGUE_URL}?page_standings={page}"
+        paginated_url = f\"{CLASSIC_LEAGUE_URL}?page_standings={page}\"
         page_data = get_json_from_url(paginated_url)
         
         if not page_data or not page_data.get('standings', {}).get('results', []):
-            print("  No more pages or failed to fetch page data. Stopping.")
+            print(\"  No more pages or failed to fetch page data. Stopping.\")
             break
 
         # On the first loop, save the main league data structure
@@ -143,10 +158,10 @@ def main():
         
         page_results = page_data['standings']['results']
         all_managers_list.extend(page_results)
-        print(f"  Fetched page {page}, {len(page_results)} managers found. Total managers: {len(all_managers_list)}")
+        print(f\"  Fetched page {page}, {len(page_results)} managers found. Total managers: {len(all_managers_list)}\")
 
         if not page_data['standings'].get('has_next', False):
-            print("  API confirmed this is the last page.")
+            print(\"  API confirmed this is the last page.\")
             break
         
         page += 1
@@ -158,14 +173,14 @@ def main():
         classic_league_data['standings']['results'] = all_managers_list
 
     if not all([fpl_data, classic_league_data]): 
-        print("Failed to fetch all necessary base data. Exiting."); return
-    print("Successfully fetched all base data.")
+        print(\"Failed to fetch all necessary base data. Exiting.\"); return
+    print(\"Successfully fetched all base data.\")
     
     # --- Determine last finished gameweek ---
     finished_gws = [gw['id'] for gw in fpl_data['events'] if gw['finished']]
-    if not finished_gws: print("No gameweeks have finished yet. Exiting."); return
+    if not finished_gws: print(\"No gameweeks have finished yet. Exiting.\"); return
     last_finished_gw = max(finished_gws)
-    print(f"Detected last finished gameweek as GW{last_finished_gw}")
+    print(f\"Detected last finished gameweek as GW{last_finished_gw}\")
 
     gw_month_map = get_gameweek_to_month_map(fpl_data)
     manager_df = pd.DataFrame(classic_league_data['standings']['results'])[['entry', 'player_name', 'entry_name']].rename(
@@ -175,22 +190,25 @@ def main():
     
     player_id_to_type_map = elements_df.set_index('id')['element_type'].to_dict()
     
-    print("Pre-fetching manager histories, transfers, and player details...")
+    print(\"Pre-fetching manager histories and transfers...\")
     manager_histories = {row['manager_id']: get_json_from_url(ENTRY_HISTORY_URL.format(TID=row['manager_id'])) for _, row in manager_df.iterrows()}
     manager_transfers = {row['manager_id']: get_json_from_url(ENTRY_TRANSFERS_URL.format(TID=row['manager_id'])) for _, row in manager_df.iterrows()}
-    player_details_dict = {pid: get_json_from_url(ELEMENT_SUMMARY_URL.format(EID=pid)) for pid in elements_df['id']}
+    
+    # --- SIGNIFICANT OPTIMIZATION ---
+    # Removed the 800+ sequential API calls to ELEMENT_SUMMARY_URL. 
+    # Player scores are now pulled from the already-fetched live_gw_data.
 
     # --- THE DEFINITIVE TIME MACHINE (based on your superior logic) ---
-    print("Loading historical rank 'Time Machine' from Google Sheet...")
+    print(\"Loading historical rank 'Time Machine' from Google Sheet...\")
     try:
-        time_machine_sheet = spreadsheet.worksheet("_time_machine_ranks")
+        time_machine_sheet = spreadsheet.worksheet(\"_time_machine_ranks\")
         time_machine_df = pd.DataFrame(time_machine_sheet.get_all_records())
     except gspread.WorksheetNotFound:
-        print("  '_time_machine_ranks' not found. Will be created at the end of this run.")
+        print(\"  '_time_machine_ranks' not found. Will be created at the end of this run.\")
         time_machine_df = pd.DataFrame(columns=['gameweek', 'manager_id', 'manager_name', 'classic_rank'])
     
     # --- Read the manual penalty data and create player name map ---
-    print("Fetching manual penalty data...")
+    print(\"Fetching manual penalty data...\")
     try:
         manual_penalty_sheet = spreadsheet.worksheet('manual_penalty_data')
         manual_penalty_df = pd.DataFrame(manual_penalty_sheet.get_all_records())
@@ -198,7 +216,7 @@ def main():
             # Ensure Gameweek column is numeric for safe comparison
             manual_penalty_df['Gameweek'] = pd.to_numeric(manual_penalty_df['Gameweek'], errors='coerce').dropna()
     except gspread.WorksheetNotFound:
-        print("Warning: 'manual_penalty_data' sheet not found. Penalty King award will be zero.")
+        print(\"Warning: 'manual_penalty_data' sheet not found. Penalty King award will be zero.\")
         manual_penalty_df = pd.DataFrame(columns=['Gameweek', 'Player_Name', 'Event_Type'])
 
     # --- THIS IS THE CRITICAL MISSING LINE ---
@@ -206,14 +224,14 @@ def main():
     player_name_to_id = elements_df.set_index('web_name')['id'].to_dict()
           
     long_format_data = {
-        "golden_boot": [], "playmaker": [], "golden_glove": [], "best_gk": [], "best_def": [], "best_mid": [], "best_fwd": [], "best_vc": [],
-        "transfer_king": [], "bench_king": [], "dream_team": [], "defensive_king": [], "shooting_stars": [], "penalty_king": []
+        \"golden_boot\": [], \"playmaker\": [], \"golden_glove\": [], \"best_gk\": [], \"best_def\": [], \"best_mid\": [], \"best_fwd\": [], \"best_vc\": [],
+        \"transfer_king\": [], \"bench_king\": [], \"dream_team\": [], \"defensive_king\": [], \"shooting_stars\": [], \"penalty_king\": []
     }
     
-    print(f"Processing all gameweeks up to GW{last_finished_gw}...")
+    print(f\"Processing all gameweeks up to GW{last_finished_gw}...\")
     for gw in range(1, last_finished_gw + 1):
         live_gw_data = get_json_from_url(LIVE_EVENT_URL.format(GW=gw))
-        if not live_gw_data: print(f"Could not fetch live data for GW{gw}. Skipping."); continue
+        if not live_gw_data: print(f\"Could not fetch live data for GW{gw}. Skipping.\"); continue
         
         # Identify Dream Team players and top performers                                                
         dream_team_players = {p['id'] for p in live_gw_data.get('elements', []) if p.get('stats', {}).get('in_dreamteam')}
@@ -240,7 +258,7 @@ def main():
                     ) 
                     for player_id in active_squad_ids
                 )
-                long_format_data["golden_boot"].append({'gameweek': gw, 'manager_name': manager_name, 'score': goals_scored_gw})
+                long_format_data[\"golden_boot\"].append({'gameweek': gw, 'manager_name': manager_name, 'score': goals_scored_gw})
                 # --- Playmaker: CORRECTED & ROBUST GW-by-GW LOGIC ---
                 assists_gw = sum(
                     next(
@@ -248,7 +266,7 @@ def main():
                     ) 
                     for player_id in active_squad_ids
                 )
-                long_format_data["playmaker"].append({'gameweek': gw, 'manager_name': manager_name, 'score': assists_gw})
+                long_format_data[\"playmaker\"].append({'gameweek': gw, 'manager_name': manager_name, 'score': assists_gw})
                 
                 # --- Best GK/Def/Mid/Fwd: CORRECTED & ROBUST GW-by-GW LOGIC ---                
                 # --- Best Positional Awards: CORRECTED & ROBUST GW-by-GW LOGIC ---
@@ -269,47 +287,38 @@ def main():
                         elif player_pos == 4: # Forward
                             fwd_score += player_score
                 
-                long_format_data["best_gk"].append({'gameweek': gw, 'manager_name': manager_name, 'score': gk_score})
-                long_format_data["best_def"].append({'gameweek': gw, 'manager_name': manager_name, 'score': def_score})
-                long_format_data["best_mid"].append({'gameweek': gw, 'manager_name': manager_name, 'score': mid_score})
-                long_format_data["best_fwd"].append({'gameweek': gw, 'manager_name': manager_name, 'score': fwd_score})
+                long_format_data[\"best_gk\"].append({'gameweek': gw, 'manager_name': manager_name, 'score': gk_score})
+                long_format_data[\"best_def\"].append({'gameweek': gw, 'manager_name': manager_name, 'score': def_score})
+                long_format_data[\"best_mid\"].append({'gameweek': gw, 'manager_name': manager_name, 'score': mid_score})
+                long_format_data[\"best_fwd\"].append({'gameweek': gw, 'manager_name': manager_name, 'score': fwd_score})
                                 
                 clean_sheets_gw = sum(next((p['stats'].get('clean_sheets', 0) for p in live_gw_data.get('elements', []) if p['id'] == p_id), 0) for p_id in active_squad_ids if elements_df[elements_df['id'] == p_id].iloc[0]['element_type'] in [1, 2, 3])
-                long_format_data["golden_glove"].append({'gameweek': gw, 'manager_name': manager_name, 'score': clean_sheets_gw})
+                long_format_data[\"golden_glove\"].append({'gameweek': gw, 'manager_name': manager_name, 'score': clean_sheets_gw})
 
-                # --- Best Vice-Captain (Corrected Logic) ---
+                # --- Best Vice-Captain (Optimized Logic) ---
                 vc_points = 0
-                # Find the Vice-Captain's player ID for the gameweek
                 vc_id = next((p['element'] for p in picks_data['picks'] if p['is_vice_captain']), None)
-                
-                # If a Vice-Captain was chosen, get their normal, single FPL points for that gameweek
                 if vc_id:
-                    vc_history = player_details_dict.get(vc_id, {}).get('history', [])
-                    # Safely get the score for the current gameweek
-                    vc_points = get_gw_score_from_history(vc_history, gw)
-
+                    vc_points = get_player_score_from_live(live_gw_data, vc_id)
                 long_format_data['best_vc'].append({'gameweek': gw, 'manager_name': manager_name, 'score': vc_points})
                 
-                # --- Transfer King (with Wildcard / Free Hit exclusion) ---
+                # --- Transfer King (Optimized Logic) ---
                 transfer_score_gw = 0
-                history_data = manager_histories.get(manager_id, {})
-                
-                # Find the chip played in the current gameweek, if any
+                history_data = manager_histories.get(manager_id, {}) or {}
                 chip_played_this_gw = next((chip['name'] for chip in history_data.get('chips', []) if chip['event'] == gw), None)
                 
-                # Only calculate score if Wildcard or Free Hit was NOT played
                 if chip_played_this_gw not in ['wildcard', 'freehit']:
                     transfers_in_gw = [t for t in manager_transfers.get(manager_id, []) if t['event'] == gw]
                     if transfers_in_gw:
-                        points_in = sum(get_gw_score_from_history(player_details_dict.get(t['element_in'], {}).get('history', []), gw) for t in transfers_in_gw)
-                        points_out = sum(get_gw_score_from_history(player_details_dict.get(t['element_out'], {}).get('history', []), gw) for t in transfers_in_gw)
+                        points_in = sum(get_player_score_from_live(live_gw_data, t['element_in']) for t in transfers_in_gw)
+                        points_out = sum(get_player_score_from_live(live_gw_data, t['element_out']) for t in transfers_in_gw)
                         cost = next((h.get('event_transfers_cost', 0) for h in history_data.get('current', []) if h.get('event') == gw), 0)
                         transfer_score_gw = points_in - points_out - cost
 
                 long_format_data['transfer_king'].append({'gameweek': gw, 'manager_name': manager_name, 'score': transfer_score_gw})
                 
-                # --- Bench King: CORRECTED LOGIC ---
-                bench_points = sum(player_details_dict.get(pid, {}).get('history', [])[gw-1].get('total_points', 0) for pid in bench_squad_ids)
+                # --- Bench King (Optimized Logic) ---
+                bench_points = sum(get_player_score_from_live(live_gw_data, pid) for pid in bench_squad_ids)
                 long_format_data['bench_king'].append({'gameweek': gw, 'manager_name': manager_name, 'score': bench_points})
                 
                 dream_team_score = sum(4 if p_id in top_performers else 1 for p_id in active_squad_ids if p_id in dream_team_players)
@@ -351,10 +360,10 @@ def main():
                 long_format_data['penalty_king'].append({'gameweek': gw, 'manager_name': manager_name, 'score': penalty_score_gw})
                 
                                         
-        print(f"  Processed Gameweek {gw}/{last_finished_gw}")
+        print(f\"  Processed Gameweek {gw}/{last_finished_gw}\")
         if gw < last_finished_gw: time.sleep(1)
 
-    print("Calculating final award standings...")
+    print(\"Calculating final award standings...\")
     worksheets_to_write = {}
     
     # Process special historical awards
@@ -362,7 +371,7 @@ def main():
         if not history_data: continue
         long_df = pd.DataFrame(history_data)
         wide_df = long_df.pivot(index='manager_name', columns='gameweek', values='score').fillna(0).astype(int)
-        wide_df.columns = [f"GW{col}" for col in wide_df.columns]
+        wide_df.columns = [f\"GW{col}\" for col in wide_df.columns]
         
         # --- THIS IS THE DEFINITIVE FIX ---
         # All historical awards should have their gameweek scores summed up for the total.
@@ -374,12 +383,12 @@ def main():
         final_df.sort_values(by=['Standings', 'manager_name'], inplace=True)
         final_df.rename(columns={'team_name': 'Team', 'manager_name': 'Manager'}, inplace=True)
         
-        gameweek_cols = [f"GW{i}" for i in range(1, last_finished_gw + 1)]
+        gameweek_cols = [f\"GW{i}\" for i in range(1, last_finished_gw + 1)]
         column_order = ['Standings', 'Team', 'Manager', 'Total'] + [col for col in gameweek_cols if col in final_df.columns]
         worksheets_to_write[award_name] = final_df[column_order]
 
     # Process single-value special awards
-    single_value_awards = {"steady_king": [], "highest_gw_score": [], "freehit_king": [], "benchboost_king": [], "triplecaptain_king": []}
+    single_value_awards = {\"steady_king\": [], \"highest_gw_score\": [], \"freehit_king\": [], \"benchboost_king\": [], \"triplecaptain_king\": []}
     for _, manager in manager_df.iterrows():
         manager_id, manager_name, team_name = manager['manager_id'], manager['manager_name'], manager['team_name']
         history = manager_histories.get(manager_id, {})
@@ -425,12 +434,12 @@ def main():
     
     gw_scores_df = pd.DataFrame(gw_scores_list)
     gw_scores_wide = gw_scores_df.pivot(index='manager_id', columns='gameweek', values='score').fillna(0).astype(int)
-    gw_scores_wide.columns = [f"GW{col}" for col in gw_scores_wide.columns]
+    gw_scores_wide.columns = [f\"GW{col}\" for col in gw_scores_wide.columns]
         
     classic_standings_df = pd.DataFrame(classic_league_data['standings']['results'])[['rank', 'entry_name', 'player_name', 'total', 'entry']]
     classic_standings_df.rename(columns={'rank': 'Standings', 'entry_name': 'Team', 'player_name': 'Manager', 'total': 'Total', 'entry': 'manager_id'}, inplace=True)
     classic_standings_df = classic_standings_df.merge(gw_scores_wide, on='manager_id', how='left').drop(columns=['manager_id'])
-    worksheets_to_write["classic_league_standings"] = classic_standings_df
+    worksheets_to_write[\"classic_league_standings\"] = classic_standings_df
     
     
     # --- Classic Weekly Manager (as per your definitive guide) ---        
@@ -450,7 +459,7 @@ def main():
         weekly_winners_final_df = weekly_winners.groupby('gameweek').agg(Team=('team_name', lambda x: ', '.join(x)), Manager=('manager_name', lambda x: ', '.join(x)), Score=('score', 'first')).reset_index()
         # --- THIS IS THE FIX ---
         weekly_winners_final_df.rename(columns={'gameweek': 'Gameweek'}, inplace=True)
-        worksheets_to_write["weekly_manager_log"] = weekly_winners_final_df    
+        worksheets_to_write[\"weekly_manager_log\"] = weekly_winners_final_df    
     # --- Corrected Monthly Score Calculation (with transfer costs) ---
     all_gw_scores_list = []
     for manager_id, history in manager_histories.items():
@@ -475,7 +484,7 @@ def main():
             # Pivot GW scores for this month
             gw_scores_month = all_gw_scores_df[all_gw_scores_df['gameweek'].isin(gws_in_month)]
             gw_scores_pivot = gw_scores_month.pivot(index='manager_id', columns='gameweek', values='score').fillna(0).astype(int)
-            gw_scores_pivot.columns = [f"GW{col}" for col in gw_scores_pivot.columns]
+            gw_scores_pivot.columns = [f\"GW{col}\" for col in gw_scores_pivot.columns]
             
             # Combine everything
             final_month_df = month_df.merge(gw_scores_pivot, on='manager_id')
@@ -483,16 +492,16 @@ def main():
             final_month_df['Standings'] = final_month_df['Total Monthly Points'].rank(method='min', ascending=False).astype(int)
             final_month_df.sort_values(by='Standings', inplace=True)
             
-            gw_cols = sorted([f"GW{gw}" for gw in gws_in_month])
+            gw_cols = sorted([f\"GW{gw}\" for gw in gws_in_month])
             column_order = ['Standings', 'Team', 'Manager', 'Total Monthly Points'] + gw_cols
-            worksheets_to_write[f"classic_monthly_{month_name}"] = final_month_df[column_order]
+            worksheets_to_write[f\"classic_monthly_{month_name}\"] = final_month_df[column_order]
 
     # --- League Cup Winner ---
     # This award is only processed if the season has progressed far enough for the cup to be relevant.
     if last_finished_gw >= 34:
         cup_data = get_json_from_url(CUP_STATUS_URL)
-        cup_winner_name = "To Be Determined"
-        cup_winner_team = "---"
+        cup_winner_name = \"To Be Determined\"
+        cup_winner_team = \"---\"
 
         # Check if the cup data exists and is marked as finished
         if cup_data and cup_data.get('cup', {}).get('status') == 'finished':
@@ -512,12 +521,12 @@ def main():
 
         # Create a DataFrame to store the result
         cup_df = pd.DataFrame([
-            {"Winner": cup_winner_name, "Team": cup_winner_team}
+            {\"Winner\": cup_winner_name, \"Team\": cup_winner_team}
         ])
-        worksheets_to_write["cup_winner"] = cup_df
+        worksheets_to_write[\"cup_winner\"] = cup_df
 
     # --- Update the Time Machine for the next run ---
-    print("Updating the '_time_machine_ranks' sheet...")
+    print(\"Updating the '_time_machine_ranks' sheet...\")
     
     classic_ranks_now = {s['entry']: s['rank'] for s in classic_league_data.get('standings', {}).get('results', [])}
     
@@ -539,38 +548,38 @@ def main():
     
     # Combine old and new data and save
     updated_time_machine_df = pd.concat([time_machine_df, new_ranks_df]).sort_values(by=['gameweek', 'classic_rank'])
-    worksheets_to_write["_time_machine_ranks"] = updated_time_machine_df
+    worksheets_to_write[\"_time_machine_ranks\"] = updated_time_machine_df
 
     metadata_df = pd.DataFrame([{'last_finished_gw': last_finished_gw, 'last_updated_utc': datetime.now(timezone.utc).isoformat()}])
-    worksheets_to_write["metadata"] = metadata_df
+    worksheets_to_write[\"metadata\"] = metadata_df
 
-    print("Writing all processed data to Google Sheets...")
+    print(\"Writing all processed data to Google Sheets...\")
     # Fetch all existing worksheet titles in a single, efficient API call
     existing_worksheets = {ws.title for ws in gspread_api_call(lambda: spreadsheet.worksheets())}
-    print(f"  Found {len(existing_worksheets)} existing worksheets.")
+    print(f\"  Found {len(existing_worksheets)} existing worksheets.\")
 
     for name, df in worksheets_to_write.items():
         if df is None or df.empty:
-            print(f"  Skipping '{name}' as it has no data.")
+            print(f\"  Skipping '{name}' as it has no data.\")
             continue
 
         try:
             if name in existing_worksheets:
                 worksheet = gspread_api_call(lambda: spreadsheet.worksheet(name))
                 gspread_api_call(lambda: worksheet.clear())
-                print(f"  Cleared existing worksheet: '{name}'")
+                print(f\"  Cleared existing worksheet: '{name}'\")
             else:
                 worksheet = gspread_api_call(lambda: spreadsheet.add_worksheet(title=name, rows=len(df) + 1, cols=len(df.columns) + 1))
-                print(f"  Created new worksheet: '{name}'")
+                print(f\"  Created new worksheet: '{name}'\")
             
             gspread_api_call(lambda: set_with_dataframe(worksheet, df, include_index=False))
-            print(f"  Successfully wrote data to '{name}'.")
+            print(f\"  Successfully wrote data to '{name}'.\")
         except Exception as e:
-            print(f"  !! FAILED to write worksheet '{name}'. Error: {e}")
+            print(f\"  !! FAILED to write worksheet '{name}'. Error: {e}\")
             continue
         time.sleep(3)
 
-    print("--- Pipeline finished successfully! ---")
+    print(\"--- Pipeline finished successfully! ---\")
 
-if __name__ == "__main__":
+if __name__ == \"__main__\":
     main()
